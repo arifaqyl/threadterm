@@ -2,85 +2,35 @@
 
 **Threads in your terminal.**
 
-A hybrid TUI + CLI for [Meta Threads](https://www.threads.net) — feed, thread view, compose, search, and `--json` for agents. Built with Go, Bubble Tea, and Lip Gloss.
+A hybrid TUI + CLI for [Meta Threads](https://www.threads.net) — feed, thread view, compose, themes, in-app login, and `--json` for agents. Built with Go, Bubble Tea, and Lip Gloss.
 
-```
-threadterm                 # open the TUI
-threadterm feed --json     # agent-friendly feed
-threadterm post "ship it"  # publish from the shell
-threadterm login           # Meta OAuth (localhost)
+```bash
+D:\threadterm\threadterm.exe --demo   # Windows
+threadterm --demo                     # after install
 ```
 
-![demo placeholder](assets/demo.gif)
-
-> **Not affiliated with Meta.** Uses the official Threads Graph API when authenticated. Ships with a rich **demo mode** so you can try the TUI offline instantly.
+> **Not affiliated with Meta.** Demo mode works offline. Live mode uses the official Threads Graph API.
 
 ---
 
-## Why
+## Is this already done by someone else?
 
-| Client | Stars vibe | Gap |
-|--------|------------|-----|
-| Mobile / web Threads | huge | not for terminal people |
-| [ndl](https://github.com/pgray/ndl) | small | multi-network, thin Threads UX |
-| assorted CLIs | tiny | no polished TUI |
+Short answer: **the niche is still open.**
 
-**threadterm** aims to be what [tut](https://github.com/RasmusLindroth/tut) is for Mastodon: a keyboard-first, beautiful, single-binary Threads client — plus a first-class CLI for scripts and agents.
+| Project | What it is | Stars (approx) |
+|---------|------------|----------------|
+| [ndl](https://github.com/pgray/ndl) | Threads + Bluesky TUI | ~9 |
+| [yarn-threads-cli](https://github.com/jeizzon/yarn-threads-cli) | Cookie CLI for agents | ~25 |
+| assorted CLIs | thin / early | ~0–25 |
+| [tut](https://github.com/RasmusLindroth/tut) | Mastodon TUI (inspiration) | ~500 |
 
-## Install
+Nobody has shipped the “tut for Threads” yet — polished single-binary TUI **plus** agent CLI, with honest official-API auth and a zero-setup demo. That’s the bet.
 
-### From source
+---
 
-```bash
-go install github.com/arifaqyl/threadterm/cmd/threadterm@latest
-```
+## How to use (TUI)
 
-Or:
-
-```bash
-git clone https://github.com/arifaqyl/threadterm
-cd threadterm
-go build -o threadterm ./cmd/threadterm
-```
-
-### Requirements
-
-- Go 1.22+
-- A terminal with truecolor (Windows Terminal, iTerm2, Kitty, Alacritty, …)
-
-## Quick start (demo)
-
-No Meta app needed:
-
-```bash
-threadterm --demo          # TUI
-threadterm --demo feed
-threadterm --demo post "hello from the terminal"
-threadterm --demo search golang
-threadterm --demo doctor
-```
-
-## Live mode (official API)
-
-1. Create a Meta app with **Threads API** access: [developers.facebook.com](https://developers.facebook.com/docs/threads)
-2. Add redirect URI `http://127.0.0.1:8765/callback`
-3. Export credentials (or put them in `~/.threadterm/config.json`):
-
-```bash
-export THREADTERM_CLIENT_ID=...
-export THREADTERM_CLIENT_SECRET=...
-threadterm login
-```
-
-Or paste a token directly:
-
-```bash
-threadterm login --token "$TOKEN" --user-id "$USER_ID"
-```
-
-See [docs/AUTH.md](docs/AUTH.md) for scopes, limits, and honesty about what the official API can and cannot do.
-
-## TUI keys
+First launch shows a **welcome screen** with the basics. Then:
 
 | Key | Action |
 |-----|--------|
@@ -90,74 +40,99 @@ See [docs/AUTH.md](docs/AUTH.md) for scopes, limits, and honesty about what the 
 | `R` | reply |
 | `L` | like |
 | `p` | profile |
+| `a` | **login** (token / OAuth / demo) |
+| `t` | **theme picker** |
+| `T` | cycle theme |
 | `r` | refresh |
 | `?` | help |
 | `q` | quit / back |
 
+Sidebar (wide terminals): nav + status + selected post.
+
+### Themes
+
+`jade` · `ocean` · `ember` · `mono` · `orchid`
+
+```bash
+threadterm theme ocean
+# or press t inside the TUI
+```
+
+### Login (inside the TUI)
+
+Press **`a`**:
+
+1. **Paste token** — Graph API access token + user id  
+2. **OAuth** — browser callback (needs Meta app credentials)  
+3. **Demo** — stay offline  
+
+Full auth guide: [docs/AUTH.md](docs/AUTH.md)
+
+---
+
+## Install
+
+```bash
+go install github.com/arifaqyl/threadterm/cmd/threadterm@latest
+```
+
+Or from this repo:
+
+```bash
+cd D:\threadterm
+go build -o threadterm.exe ./cmd/threadterm
+.\threadterm.exe --demo
+```
+
+---
+
 ## CLI
 
 ```bash
-threadterm feed [--json] [-n 25]
-threadterm thread <id> [--json]
-threadterm post "text" [--json]
-threadterm search "query" [--json]
-threadterm profile <username> [--json]
-threadterm like <id> [--unlike]
-threadterm whoami [--json]
+threadterm                  # TUI
+threadterm feed --json
+threadterm post "ship it"
+threadterm search golang
+threadterm profile arifaqyl
+threadterm like <id>
+threadterm login            # or press a in TUI
+threadterm theme ocean
+threadterm whoami
 threadterm doctor
-threadterm login | logout
-threadterm version
 ```
+
+Env vars: `THREADTERM_ACCESS_TOKEN`, `THREADTERM_USER_ID`, `THREADTERM_CLIENT_ID`, `THREADTERM_CLIENT_SECRET`, `THREADTERM_THEME`, `THREADTERM_DEMO=1`
+
+Config file: `~/.threadterm/config.json`
+
+---
 
 ## Architecture
 
 ```
-cmd/threadterm          entrypoint
-internal/cli            cobra commands
-internal/tui            Bubble Tea UI
-internal/api            demo adapter + Graph API client
-internal/auth           OAuth localhost + token save
-internal/config         ~/.threadterm/config.json
-internal/demo           offline viral dataset
-internal/models         shared types
+cmd/threadterm       entrypoint
+internal/cli         cobra (feed, post, login, theme, …)
+internal/tui         Bubble Tea (welcome, feed, login, themes)
+internal/api         demo adapter + Graph API
+internal/auth        OAuth localhost + token save
+internal/config      theme, welcome flag, credentials
+internal/demo        offline dataset
 ```
 
-## Agent / automation
-
-Every read/write command accepts `--json`. Example:
-
-```bash
-threadterm feed --json | jq '.posts[0].text'
-threadterm post "automated ship note" --json
-```
-
-Config via env:
-
-| Variable | Purpose |
-|----------|---------|
-| `THREADTERM_ACCESS_TOKEN` | Graph API token |
-| `THREADTERM_USER_ID` | Threads user id |
-| `THREADTERM_CLIENT_ID` | OAuth app id |
-| `THREADTERM_CLIENT_SECRET` | OAuth secret |
-| `THREADTERM_DEMO=1` | force demo |
+---
 
 ## Roadmap
 
-- [x] Demo mode TUI (feed / thread / compose / profile / help)
-- [x] CLI + `--json`
-- [x] Official Graph API client (feed, publish, reply, like, search)
-- [x] OAuth localhost login
-- [ ] VHS cassette → polished `assets/demo.gif`
-- [ ] Homebrew / scoop formula
+- [x] Demo TUI + CLI + `--json`
+- [x] Welcome / how-to onboarding
+- [x] Themes + in-TUI login
+- [x] Official Graph API + OAuth
+- [ ] VHS `assets/demo.gif`
+- [ ] Homebrew / scoop
 - [ ] Notifications pane
-- [ ] Image attach (URL) from compose
-- [ ] Config themes
+- [ ] Image URL attach
 
-## Disclaimer
-
-- Respect [Meta Platform Terms](https://developers.facebook.com/terms/) and Threads policies.
-- Official API coverage is **not** a full consumer clone (no arbitrary public firehose without permissions).
-- Demo mode is synthetic data for UX — not live Threads.
+---
 
 ## License
 

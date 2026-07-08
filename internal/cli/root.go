@@ -34,11 +34,11 @@ Default mode is demo (offline). Set a Meta Threads token for live.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := makeClient()
+			cfg, client, err := makeClient()
 			if err != nil {
 				return err
 			}
-			return tui.Run(client)
+			return tui.Run(cfg, client)
 		},
 	}
 
@@ -56,6 +56,7 @@ Default mode is demo (offline). Set a Meta Threads token for live.`,
 		cmdLogin(),
 		cmdLogout(),
 		cmdWhoami(),
+		cmdTheme(),
 		cmdDoctor(),
 		cmdVersion(),
 	)
@@ -63,15 +64,15 @@ Default mode is demo (offline). Set a Meta Threads token for live.`,
 	return root.Execute()
 }
 
-func makeClient() (api.Client, error) {
+func makeClient() (*config.Config, api.Client, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if demoForce {
 		cfg.Demo = true
 	}
-	return api.New(cfg), nil
+	return cfg, api.New(cfg), nil
 }
 
 func printJSON(v any) error {
@@ -85,7 +86,7 @@ func cmdFeed() *cobra.Command {
 		Use:   "feed",
 		Short: "Show your threads / demo feed",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := makeClient()
+			_, c, err := makeClient()
 			if err != nil {
 				return err
 			}
@@ -110,7 +111,7 @@ func cmdPost() *cobra.Command {
 		Short: "Publish a text thread",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := makeClient()
+			_, c, err := makeClient()
 			if err != nil {
 				return err
 			}
@@ -137,7 +138,7 @@ func cmdThread() *cobra.Command {
 		Short: "Show a thread and its replies",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := makeClient()
+			_, c, err := makeClient()
 			if err != nil {
 				return err
 			}
@@ -163,7 +164,7 @@ func cmdSearch() *cobra.Command {
 		Short: "Search posts (keyword API or local filter)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := makeClient()
+			_, c, err := makeClient()
 			if err != nil {
 				return err
 			}
@@ -188,7 +189,7 @@ func cmdProfile() *cobra.Command {
 		Short: "Show a profile and recent posts",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := makeClient()
+			_, c, err := makeClient()
 			if err != nil {
 				return err
 			}
@@ -215,7 +216,7 @@ func cmdLike() *cobra.Command {
 		Short: "Like a post",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := makeClient()
+			_, c, err := makeClient()
 			if err != nil {
 				return err
 			}
@@ -297,15 +298,52 @@ func cmdWhoami() *cobra.Command {
 		Use:   "whoami",
 		Short: "Show auth status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := makeClient()
+			cfg, c, err := makeClient()
 			if err != nil {
 				return err
 			}
 			st := c.AuthStatus()
 			if jsonOut {
-				return printJSON(st)
+				return printJSON(map[string]any{"auth": st, "theme": cfg.Theme})
 			}
-			fmt.Printf("mode=%s ready=%v user=%s id=%s\n", st.Mode, st.Ready, st.Username, st.UserID)
+			fmt.Printf("mode=%s ready=%v user=%s id=%s theme=%s\n", st.Mode, st.Ready, st.Username, st.UserID, cfg.Theme)
+			return nil
+		},
+	}
+}
+
+func cmdTheme() *cobra.Command {
+	return &cobra.Command{
+		Use:   "theme [name]",
+		Short: "Get or set TUI theme (jade|ocean|ember|mono|orchid)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			valid := map[string]bool{"jade": true, "ocean": true, "ember": true, "mono": true, "orchid": true}
+			if len(args) == 0 {
+				if jsonOut {
+					return printJSON(map[string]any{"theme": cfg.Theme, "available": []string{"jade", "ocean", "ember", "mono", "orchid"}})
+				}
+				fmt.Println("current:", cfg.Theme)
+				fmt.Println("available: jade · ocean · ember · mono · orchid")
+				fmt.Println("tip: press t inside the TUI, or T to cycle")
+				return nil
+			}
+			name := strings.ToLower(args[0])
+			if !valid[name] {
+				return fmt.Errorf("unknown theme %q (jade|ocean|ember|mono|orchid)", name)
+			}
+			cfg.Theme = name
+			if err := cfg.Save(); err != nil {
+				return err
+			}
+			if jsonOut {
+				return printJSON(map[string]string{"theme": name})
+			}
+			fmt.Println("theme set to", name)
 			return nil
 		},
 	}
@@ -324,6 +362,7 @@ func cmdDoctor() *cobra.Command {
 			fmt.Println("threadterm doctor")
 			fmt.Println("  config:", path)
 			fmt.Println("  mode:  ", cfg.Mode())
+			fmt.Println("  theme: ", cfg.Theme)
 			fmt.Println("  token: ", mask(cfg.AccessToken))
 			fmt.Println("  user:  ", cfg.UserID, cfg.Username)
 			fmt.Println("  app id:", mask(cfg.ClientID))

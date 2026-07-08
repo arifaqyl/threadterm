@@ -6,7 +6,10 @@ import (
 	"time"
 
 	"github.com/arifaqyl/threadterm/internal/api"
+	"github.com/arifaqyl/threadterm/internal/auth"
+	"github.com/arifaqyl/threadterm/internal/config"
 	"github.com/arifaqyl/threadterm/internal/models"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,11 +19,14 @@ import (
 type view int
 
 const (
-	viewFeed view = iota
+	viewWelcome view = iota
+	viewFeed
 	viewThread
 	viewCompose
 	viewProfile
 	viewHelp
+	viewLogin
+	viewTheme
 )
 
 type feedLoadedMsg struct {
@@ -40,48 +46,90 @@ type publishedMsg struct {
 	res models.PublishResult
 	err error
 }
+type loginDoneMsg struct {
+	cfg *config.Config
+	err error
+}
 type statusMsg string
 
 type Model struct {
+	cfg    *config.Config
 	client api.Client
 	width  int
 	height int
+	styles styles
+	theme  Theme
 
 	view   view
 	status string
 	err    string
 
-	posts    []models.Post
-	cursor   int
-	thread   *models.Thread
-	profile  *models.User
-	pPosts   []models.Post
+	posts   []models.Post
+	cursor  int
+	thread  *models.Thread
+	profile *models.User
+	pPosts  []models.Post
 
 	compose textarea.Model
 	replyTo string
 
-	vp viewport.Model
+	// login form
+	loginStep  int // 0=menu, 1=token, 2=userid, 3=oauth running
+	tokenInput textinput.Model
+	uidInput   textinput.Model
+
+	themeCursor int
+
+	vp    viewport.Model
 	ready bool
 }
 
-func New(client api.Client) Model {
+func New(cfg *config.Config, client api.Client) Model {
+	th := themeByName(cfg.Theme)
 	ta := textarea.New()
-	ta.Placeholder = "What's new?"
+	ta.Placeholder = "What's on your mind?"
 	ta.CharLimit = 500
-	ta.SetHeight(6)
-	ta.SetWidth(60)
+	ta.SetHeight(5)
+	ta.SetWidth(56)
 	ta.ShowLineNumbers = false
+
+	ti := textinput.New()
+	ti.Placeholder = "paste access token"
+	ti.CharLimit = 512
+	ti.Width = 48
+	ti.EchoMode = textinput.EchoPassword
+	ti.EchoCharacter = '•'
+
+	ui := textinput.New()
+	ui.Placeholder = "Threads user id"
+	ui.CharLimit = 64
+	ui.Width = 48
+
+	start := viewFeed
+	if !cfg.SeenWelcome {
+		start = viewWelcome
+	}
+
 	return Model{
-		client:  client,
-		view:    viewFeed,
-		compose: ta,
-		status:  "loading feed…",
-		vp:      viewport.New(80, 20),
+		cfg:        cfg,
+		client:     client,
+		theme:      th,
+		styles:     makeStyles(th),
+		view:       start,
+		compose:    ta,
+		tokenInput: ti,
+		uidInput:   ui,
+		status:     "ready",
+		vp:         viewport.New(80, 20),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(loadFeed(m.client), tea.SetWindowTitle("threadterm"))
+	cmds := []tea.Cmd{tea.SetWindowTitle("threadterm")}
+	if m.view != viewWelcome {
+		cmds = append(cmds, loadFeed(m.client))
+	}
+	return tea.Batch(cmds...)
 }
 
 func loadFeed(c api.Client) tea.Cmd {
@@ -136,16 +184,28 @@ func likePost(c api.Client, id string, unlike bool) tea.Cmd {
 	}
 }
 
+func runOAuth(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		out, err := auth.LoginLocalhost(cfg, 8765)
+		return loginDoneMsg{cfg: out, err: err}
+	}
+}
+
+func saveToken(cfg *config.Config, token, uid string) tea.Cmd {
+	return func() tea.Msg {
+		if err := auth.SetToken(cfg, token, uid); err != nil {
+			return loginDoneMsg{err: err}
+		}
+		return loginDoneMsg{cfg: cfg}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		header := 4
-		footer := 2
-		m.vp.Width = msg.Width
-		m.vp.Height = max(1, msg.Height-header-footer)
-		m.compose.SetWidth(min(72, msg.Width-4))
+		m.layout()
 		m.ready = true
 		m.refreshViewport()
 		return m, nil
@@ -157,10 +217,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.posts = msg.page.Posts
-		m.cursor = 0
+		if m.cursor >= len(m.posts) {
+			m.cursor = max(0, len(m.posts)-1)
+		}
 		m.err = ""
 		auth := m.client.AuthStatus()
-		m.status = fmt.Sprintf("%s · %d posts · %s", auth.Mode, len(m.posts), time.Now().Format("15:04"))
+		m.status = fmt.Sprintf("%d posts · %s · %s", len(m.posts), auth.Mode, time.Now().Format("15:04"))
 		m.refreshViewport()
 		return m, nil
 
@@ -201,106 +263,184 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "posted · " + msg.res.ID
 		return m, loadFeed(m.client)
 
+	case loginDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			m.status = "login failed"
+			m.loginStep = 0
+			return m, nil
+		}
+		m.cfg = msg.cfg
+		m.client = api.New(m.cfg)
+		m.view = viewFeed
+		m.loginStep = 0
+		m.status = fmt.Sprintf("logged in · @%s", m.cfg.Username)
+		m.err = ""
+		return m, loadFeed(m.client)
+
 	case statusMsg:
 		m.status = string(msg)
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.view == viewCompose {
+		switch m.view {
+		case viewWelcome:
+			return m.updateWelcome(msg)
+		case viewCompose:
 			return m.updateCompose(msg)
-		}
-		switch msg.String() {
-		case "ctrl+c", "q":
-			if m.view != viewFeed && m.view != viewHelp {
-				m.view = viewFeed
-				m.thread = nil
-				m.profile = nil
-				m.refreshViewport()
-				return m, nil
-			}
-			if m.view == viewHelp {
+		case viewLogin:
+			return m.updateLogin(msg)
+		case viewTheme:
+			return m.updateTheme(msg)
+		case viewHelp:
+			if msg.String() == "q" || msg.String() == "esc" || msg.String() == "?" || msg.String() == "h" {
 				m.view = viewFeed
 				m.refreshViewport()
 				return m, nil
 			}
-			return m, tea.Quit
-		case "?":
-			m.view = viewHelp
-			m.refreshViewport()
 			return m, nil
-		case "r":
-			m.status = "refreshing…"
-			return m, loadFeed(m.client)
-		case "j", "down":
-			if m.cursor < len(m.posts)-1 {
-				m.cursor++
-				m.refreshViewport()
-			}
-			return m, nil
-		case "k", "up":
-			if m.cursor > 0 {
-				m.cursor--
-				m.refreshViewport()
-			}
-			return m, nil
-		case "g":
-			m.cursor = 0
-			m.refreshViewport()
-			return m, nil
-		case "G":
-			if len(m.posts) > 0 {
-				m.cursor = len(m.posts) - 1
-				m.refreshViewport()
-			}
-			return m, nil
-		case "enter", "l":
-			if m.view == viewFeed && len(m.posts) > 0 {
-				id := m.posts[m.cursor].ID
-				m.status = "loading thread…"
-				return m, loadThread(m.client, id)
-			}
-			return m, nil
-		case "c", "n":
-			m.view = viewCompose
-			m.replyTo = ""
-			m.compose.Placeholder = "What's new?"
-			m.compose.Focus()
-			return m, textarea.Blink
-		case "R":
-			if len(m.posts) > 0 {
-				m.view = viewCompose
-				m.replyTo = m.posts[m.cursor].ID
-				m.compose.Placeholder = "Reply to @" + m.posts[m.cursor].Username
-				m.compose.Focus()
-				return m, textarea.Blink
-			}
-			return m, nil
-		case "L":
-			if len(m.posts) > 0 {
-				p := &m.posts[m.cursor]
-				return m, likePost(m.client, p.ID, p.LikedByMe)
-			}
-			return m, nil
-		case "p":
-			if len(m.posts) > 0 {
-				m.status = "loading profile…"
-				return m, loadProfile(m.client, m.posts[m.cursor].Username)
-			}
-			return m, nil
-		case "esc", "backspace", "h":
-			if m.view != viewFeed {
-				m.view = viewFeed
-				m.thread = nil
-				m.profile = nil
-				m.refreshViewport()
-			}
-			return m, nil
+		default:
+			return m.updateNav(msg)
 		}
 	}
 
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
+}
+
+func (m Model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter", " ", "1":
+		m.cfg.SeenWelcome = true
+		_ = m.cfg.Save()
+		m.view = viewFeed
+		m.status = "loading feed…"
+		m.refreshViewport()
+		return m, loadFeed(m.client)
+	case "2", "l":
+		m.cfg.SeenWelcome = true
+		_ = m.cfg.Save()
+		m.view = viewLogin
+		m.loginStep = 0
+		m.refreshViewport()
+		return m, nil
+	case "3", "t":
+		m.view = viewTheme
+		m.refreshViewport()
+		return m, nil
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m Model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.loginStep {
+	case 0: // menu
+		switch msg.String() {
+		case "1", "t":
+			m.loginStep = 1
+			m.tokenInput.SetValue("")
+			m.tokenInput.Focus()
+			return m, textinput.Blink
+		case "2", "o":
+			if m.cfg.ClientID == "" || m.cfg.ClientSecret == "" {
+				m.err = "set THREADTERM_CLIENT_ID + THREADTERM_CLIENT_SECRET first (see docs/AUTH.md)"
+				return m, nil
+			}
+			m.loginStep = 3
+			m.status = "waiting for browser OAuth…"
+			m.err = ""
+			return m, runOAuth(m.cfg)
+		case "3", "d":
+			m.cfg.Demo = true
+			m.cfg.AccessToken = ""
+			_ = m.cfg.Save()
+			m.client = api.New(m.cfg)
+			m.view = viewFeed
+			m.status = "demo mode"
+			return m, loadFeed(m.client)
+		case "esc", "q", "h":
+			m.view = viewFeed
+			m.refreshViewport()
+			return m, nil
+		}
+	case 1: // token
+		switch msg.String() {
+		case "esc":
+			m.loginStep = 0
+			m.tokenInput.Blur()
+			return m, nil
+		case "enter":
+			m.loginStep = 2
+			m.tokenInput.Blur()
+			m.uidInput.SetValue(m.cfg.UserID)
+			m.uidInput.Focus()
+			return m, textinput.Blink
+		}
+		var cmd tea.Cmd
+		m.tokenInput, cmd = m.tokenInput.Update(msg)
+		return m, cmd
+	case 2: // user id
+		switch msg.String() {
+		case "esc":
+			m.loginStep = 1
+			m.uidInput.Blur()
+			m.tokenInput.Focus()
+			return m, textinput.Blink
+		case "enter":
+			tok := strings.TrimSpace(m.tokenInput.Value())
+			uid := strings.TrimSpace(m.uidInput.Value())
+			if tok == "" || uid == "" {
+				m.err = "token and user id required"
+				return m, nil
+			}
+			m.uidInput.Blur()
+			m.status = "saving…"
+			return m, saveToken(m.cfg, tok, uid)
+		}
+		var cmd tea.Cmd
+		m.uidInput, cmd = m.uidInput.Update(msg)
+		return m, cmd
+	case 3: // oauth waiting — only esc to cancel visually (server still runs until timeout)
+		if msg.String() == "esc" || msg.String() == "q" {
+			m.loginStep = 0
+			m.status = "oauth cancelled (server may still finish)"
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		m.themeCursor = (m.themeCursor + 1) % len(themes)
+		return m, nil
+	case "k", "up":
+		m.themeCursor = (m.themeCursor - 1 + len(themes)) % len(themes)
+		return m, nil
+	case "enter", " ":
+		th := themes[m.themeCursor]
+		m.applyTheme(th)
+		m.cfg.Theme = th.Name
+		_ = m.cfg.Save()
+		m.view = viewFeed
+		m.status = "theme · " + th.Name
+		m.refreshViewport()
+		return m, nil
+	case "esc", "q", "h":
+		m.view = viewFeed
+		m.refreshViewport()
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) applyTheme(th Theme) {
+	m.theme = th
+	m.styles = makeStyles(th)
 }
 
 func (m Model) updateCompose(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -313,7 +453,7 @@ func (m Model) updateCompose(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
-	case "ctrl+s", "ctrl+enter":
+	case "ctrl+s":
 		text := strings.TrimSpace(m.compose.Value())
 		if text == "" {
 			m.status = "empty post"
@@ -328,6 +468,132 @@ func (m Model) updateCompose(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "q":
+		if m.view != viewFeed {
+			m.view = viewFeed
+			m.thread = nil
+			m.profile = nil
+			m.refreshViewport()
+			return m, nil
+		}
+		return m, tea.Quit
+	case "?":
+		m.view = viewHelp
+		m.refreshViewport()
+		return m, nil
+	case "a", "A":
+		m.view = viewLogin
+		m.loginStep = 0
+		m.err = ""
+		m.refreshViewport()
+		return m, nil
+	case "t":
+		// sync cursor to current theme
+		for i, th := range themes {
+			if th.Name == m.theme.Name {
+				m.themeCursor = i
+				break
+			}
+		}
+		m.view = viewTheme
+		m.refreshViewport()
+		return m, nil
+	case "T":
+		th := nextTheme(m.theme.Name)
+		m.applyTheme(th)
+		m.cfg.Theme = th.Name
+		_ = m.cfg.Save()
+		m.status = "theme · " + th.Name
+		m.refreshViewport()
+		return m, nil
+	case "r":
+		m.status = "refreshing…"
+		return m, loadFeed(m.client)
+	case "j", "down":
+		if m.cursor < len(m.posts)-1 {
+			m.cursor++
+			m.refreshViewport()
+		}
+		return m, nil
+	case "k", "up":
+		if m.cursor > 0 {
+			m.cursor--
+			m.refreshViewport()
+		}
+		return m, nil
+	case "g":
+		m.cursor = 0
+		m.refreshViewport()
+		return m, nil
+	case "G":
+		if len(m.posts) > 0 {
+			m.cursor = len(m.posts) - 1
+			m.refreshViewport()
+		}
+		return m, nil
+	case "enter", "l":
+		if m.view == viewFeed && len(m.posts) > 0 {
+			m.status = "loading thread…"
+			return m, loadThread(m.client, m.posts[m.cursor].ID)
+		}
+		return m, nil
+	case "c", "n":
+		m.view = viewCompose
+		m.replyTo = ""
+		m.compose.Placeholder = "What's on your mind?"
+		m.compose.Focus()
+		return m, textarea.Blink
+	case "R":
+		if len(m.posts) > 0 {
+			m.view = viewCompose
+			m.replyTo = m.posts[m.cursor].ID
+			m.compose.Placeholder = "Reply to @" + m.posts[m.cursor].Username
+			m.compose.Focus()
+			return m, textarea.Blink
+		}
+		return m, nil
+	case "L":
+		if len(m.posts) > 0 {
+			p := &m.posts[m.cursor]
+			return m, likePost(m.client, p.ID, p.LikedByMe)
+		}
+		return m, nil
+	case "p":
+		if len(m.posts) > 0 {
+			m.status = "loading profile…"
+			return m, loadProfile(m.client, m.posts[m.cursor].Username)
+		}
+		return m, nil
+	case "esc", "backspace", "h":
+		if m.view != viewFeed {
+			m.view = viewFeed
+			m.thread = nil
+			m.profile = nil
+			m.refreshViewport()
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.vp, cmd = m.vp.Update(msg)
+	return m, cmd
+}
+
+func (m *Model) layout() {
+	sideW := 22
+	if m.width < 70 {
+		sideW = 0
+	}
+	header := 3
+	footer := 2
+	m.vp.Width = max(20, m.width-sideW-2)
+	m.vp.Height = max(1, m.height-header-footer)
+	m.compose.SetWidth(min(64, m.vp.Width-4))
+}
+
 func (m *Model) refreshViewport() {
 	switch m.view {
 	case viewFeed:
@@ -337,9 +603,9 @@ func (m *Model) refreshViewport() {
 	case viewProfile:
 		m.vp.SetContent(m.renderProfileBody())
 	case viewHelp:
-		m.vp.SetContent(helpText)
-	case viewCompose:
-		// compose rendered in View()
+		m.vp.SetContent(m.renderHelp())
+	case viewWelcome, viewLogin, viewTheme, viewCompose:
+		// rendered in View()
 	}
 }
 
@@ -347,161 +613,326 @@ func (m Model) View() string {
 	if !m.ready {
 		return "\n  threadterm · starting…"
 	}
-	auth := m.client.AuthStatus()
-	title := brandStyle.Render(" threadterm ")
-	mode := modeStyle.Render(fmt.Sprintf(" %s ", auth.Mode))
-	if auth.Username != "" {
-		mode = modeStyle.Render(fmt.Sprintf(" %s · @%s ", auth.Mode, auth.Username))
-	}
-	header := lipgloss.JoinHorizontal(lipgloss.Top, title, " ", mode)
-	sub := mutedStyle.Render("  Threads in your terminal  ·  ? help  ·  q quit")
 
-	var body string
 	switch m.view {
+	case viewWelcome:
+		return m.renderWelcome()
+	case viewLogin:
+		return m.frame(m.renderLogin())
+	case viewTheme:
+		return m.frame(m.renderThemePicker())
 	case viewCompose:
-		label := "compose"
-		if m.replyTo != "" {
-			label = "reply"
-		}
-		body = composeBox.Render(
-			accentStyle.Render(label)+"\n\n"+
-				m.compose.View()+"\n\n"+
-				mutedStyle.Render("ctrl+s post · esc cancel · "+fmt.Sprintf("%d/500", len(m.compose.Value()))),
-		)
+		return m.frame(m.renderCompose())
 	default:
-		body = m.vp.View()
+		body := m.vp.View()
+		if m.width >= 70 {
+			body = lipgloss.JoinHorizontal(lipgloss.Top, m.renderSidebar(), body)
+		}
+		return m.frame(body)
 	}
+}
+
+func (m Model) frame(body string) string {
+	auth := m.client.AuthStatus()
+	title := m.styles.brand.Render(" threadterm ")
+	modeLabel := auth.Mode
+	if auth.Username != "" && auth.Mode != "demo" {
+		modeLabel = auth.Mode + " · @" + auth.Username
+	} else if auth.Mode == "demo" {
+		modeLabel = "demo"
+	}
+	mode := m.styles.mode.Render(" " + modeLabel + " ")
+	themeBadge := m.styles.muted.Render("  " + m.theme.Name)
+	header := lipgloss.JoinHorizontal(lipgloss.Center, title, " ", mode, themeBadge)
 
 	footerBits := []string{m.status}
 	if m.err != "" {
-		footerBits = append(footerBits, errStyle.Render(m.err))
+		footerBits = append(footerBits, m.styles.err.Render(m.err))
 	}
-	footer := footerStyle.Render("  " + strings.Join(footerBits, "  ·  "))
+	footerBits = append(footerBits, m.styles.muted.Render("? help · a login · t theme · q quit"))
+	footer := m.styles.footer.Render("  " + strings.Join(footerBits, "  ·  "))
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, sub, "", body, footer)
+	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
+}
+
+func (m Model) renderSidebar() string {
+	s := m.styles
+	auth := m.client.AuthStatus()
+	items := []string{
+		s.accent.Render("NAV"),
+		m.navItem("f", "feed", m.view == viewFeed),
+		m.navItem("c", "compose", m.view == viewCompose),
+		m.navItem("a", "login", m.view == viewLogin),
+		m.navItem("t", "theme", m.view == viewTheme),
+		m.navItem("?", "help", m.view == viewHelp),
+		"",
+		s.accent.Render("STATUS"),
+		s.muted.Render("mode  "+auth.Mode),
+		s.muted.Render("theme "+m.theme.Name),
+	}
+	if auth.Username != "" {
+		items = append(items, s.muted.Render("@"+auth.Username))
+	}
+	if m.view == viewFeed && len(m.posts) > 0 {
+		items = append(items, "", s.accent.Render("SELECTED"))
+		p := m.posts[m.cursor]
+		items = append(items, s.muted.Render("@"+p.Username))
+		items = append(items, s.muted.Render(fmt.Sprintf("♥ %s", formatCount(p.LikeCount))))
+	}
+	inner := strings.Join(items, "\n")
+	return s.sidebar.Width(20).Height(m.vp.Height).Render(inner)
+}
+
+func (m Model) navItem(key, label string, active bool) string {
+	if active {
+		return m.styles.accent.Render("▸ " + key + "  " + label)
+	}
+	return m.styles.muted.Render("  " + key + "  " + label)
+}
+
+func (m Model) renderWelcome() string {
+	s := m.styles
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.theme.Accent)).
+		Padding(1, 3).
+		Width(min(64, m.width-4))
+
+	body := strings.Join([]string{
+		s.brand.Render(" threadterm "),
+		"",
+		s.title.Render("Threads in your terminal"),
+		s.muted.Render("TUI + CLI · demo offline · official API when live"),
+		"",
+		s.accent.Render("How to use"),
+		"  j/k     move through posts",
+		"  enter   open a thread",
+		"  c       compose a post",
+		"  R       reply · L like · p profile",
+		"  a       login (token or OAuth)",
+		"  t       pick a color theme",
+		"  ?       full help · q quit",
+		"",
+		s.accent.Render("Get started"),
+		"  1  enter   browse demo feed",
+		"  2  l       login to your Threads",
+		"  3  t       choose a theme first",
+		"",
+		s.hint.Render("Tip: everything also works as CLI — threadterm feed --json"),
+	}, "\n")
+
+	content := box.Render(body)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+}
+
+func (m Model) renderLogin() string {
+	s := m.styles
+	var body string
+	switch m.loginStep {
+	case 0:
+		body = strings.Join([]string{
+			s.section.Render(" LOGIN "),
+			"",
+			"Connect your Threads account, or stay in demo.",
+			"",
+			s.accent.Render("1 / t") + "  Paste access token + user id",
+			s.accent.Render("2 / o") + "  OAuth in browser (needs Meta app)",
+			s.accent.Render("3 / d") + "  Stay in demo mode",
+			"",
+			s.muted.Render("OAuth needs THREADTERM_CLIENT_ID + CLIENT_SECRET"),
+			s.muted.Render("Full guide: docs/AUTH.md  ·  esc back"),
+		}, "\n")
+	case 1:
+		body = strings.Join([]string{
+			s.section.Render(" TOKEN "),
+			"",
+			"Paste your Threads Graph API access token:",
+			"",
+			m.tokenInput.View(),
+			"",
+			s.muted.Render("enter next · esc back"),
+		}, "\n")
+	case 2:
+		body = strings.Join([]string{
+			s.section.Render(" USER ID "),
+			"",
+			"Threads user id (numeric):",
+			"",
+			m.uidInput.View(),
+			"",
+			s.muted.Render("enter save · esc back"),
+		}, "\n")
+	case 3:
+		body = strings.Join([]string{
+			s.section.Render(" OAUTH "),
+			"",
+			"Browser should open for Meta authorization.",
+			"Waiting on http://127.0.0.1:8765/callback …",
+			"",
+			s.muted.Render("Approve in the browser, then come back here."),
+			s.hint.Render("If nothing opens, check the URL printed in the terminal."),
+		}, "\n")
+	}
+	return s.compose.Render(body)
+}
+
+func (m Model) renderThemePicker() string {
+	s := m.styles
+	var b strings.Builder
+	b.WriteString(s.section.Render(" THEMES "))
+	b.WriteString("\n\n")
+	b.WriteString(s.muted.Render("Personalize colors. Enter to apply · T cycles anytime.\n\n"))
+	for i, th := range themes {
+		swatch := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(th.BrandFg)).
+			Background(lipgloss.Color(th.Accent)).
+			Render(" ██ ")
+		line := fmt.Sprintf("%s  %s", swatch, th.Name)
+		if i == m.themeCursor {
+			line = s.accent.Render("▸ ") + line + s.muted.Render("  ←")
+		} else {
+			line = "  " + line
+		}
+		if th.Name == m.theme.Name {
+			line += s.tag.Render("  active")
+		}
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("\n" + s.muted.Render("j/k move · enter apply · esc back"))
+	return b.String()
+}
+
+func (m Model) renderCompose() string {
+	s := m.styles
+	label := "COMPOSE"
+	if m.replyTo != "" {
+		label = "REPLY"
+	}
+	return s.compose.Render(
+		s.section.Render(" "+label+" ") + "\n\n" +
+			m.compose.View() + "\n\n" +
+			s.muted.Render(fmt.Sprintf("ctrl+s post · esc cancel · %d/500", len([]rune(m.compose.Value())))),
+	)
 }
 
 func (m Model) renderFeedBody() string {
+	s := m.styles
 	if len(m.posts) == 0 {
-		return mutedStyle.Render("\n  no posts — press r to refresh, or c to compose\n")
+		return s.muted.Render("\n  no posts — press r to refresh, c to compose, a to login\n")
 	}
 	var b strings.Builder
+	b.WriteString(s.muted.Render(fmt.Sprintf("  FEED  ·  %d  ·  j/k move  ·  enter open\n\n", len(m.posts))))
 	for i, p := range m.posts {
-		selected := i == m.cursor
-		b.WriteString(renderPostCard(p, selected, m.width))
+		b.WriteString(m.renderPostCard(p, i == m.cursor))
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
 func (m Model) renderThreadBody() string {
+	s := m.styles
 	if m.thread == nil {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(sectionStyle.Render(" THREAD "))
+	b.WriteString(s.section.Render(" THREAD "))
+	b.WriteString("\n\n")
+	b.WriteString(m.renderPostCard(m.thread.Root, true))
 	b.WriteString("\n")
-	b.WriteString(renderPostCard(m.thread.Root, true, m.width))
-	b.WriteString("\n")
-	b.WriteString(sectionStyle.Render(fmt.Sprintf(" REPLIES (%d) ", len(m.thread.Replies))))
-	b.WriteString("\n")
+	b.WriteString(s.section.Render(fmt.Sprintf(" REPLIES · %d ", len(m.thread.Replies))))
+	b.WriteString("\n\n")
 	for _, r := range m.thread.Replies {
-		b.WriteString(renderPostCard(r, false, m.width))
+		b.WriteString(m.renderPostCard(r, false))
 		b.WriteString("\n")
 	}
-	b.WriteString(mutedStyle.Render("\n  h/esc back · R reply · L like\n"))
+	b.WriteString(s.muted.Render("\n  h/esc back · R reply · L like\n"))
 	return b.String()
 }
 
 func (m Model) renderProfileBody() string {
+	s := m.styles
 	if m.profile == nil {
 		return ""
 	}
 	u := m.profile
 	var b strings.Builder
-	b.WriteString(brandStyle.Render(" @" + u.Username + " "))
+	b.WriteString(s.brand.Render(" @" + u.Username + " "))
 	if u.Verified {
-		b.WriteString(accentStyle.Render(" ✓"))
+		b.WriteString(s.accent.Render(" ✓"))
 	}
 	b.WriteString("\n")
 	if u.Name != "" {
-		b.WriteString(u.Name + "\n")
+		b.WriteString(s.title.Render(u.Name) + "\n")
 	}
 	if u.Bio != "" {
-		b.WriteString(mutedStyle.Render(u.Bio) + "\n")
+		b.WriteString(s.muted.Render(u.Bio) + "\n")
 	}
-	b.WriteString(mutedStyle.Render(fmt.Sprintf("%s followers", formatCount(u.Followers))) + "\n\n")
+	b.WriteString(s.muted.Render(fmt.Sprintf("%s followers", formatCount(u.Followers))) + "\n\n")
 	for _, p := range m.pPosts {
-		b.WriteString(renderPostCard(p, false, m.width))
+		b.WriteString(m.renderPostCard(p, false))
 		b.WriteString("\n")
 	}
+	b.WriteString(s.muted.Render("\n  h/esc back\n"))
 	return b.String()
 }
 
-func renderPostCard(p models.Post, selected bool, width int) string {
-	w := max(40, width-4)
-	handle := accentStyle.Render("@" + p.Username)
-	ago := mutedStyle.Render(relTime(p.Timestamp))
+func (m Model) renderHelp() string {
+	s := m.styles
+	return strings.Join([]string{
+		s.section.Render(" HELP "),
+		"",
+		s.accent.Render("Navigation"),
+		"  j/k  ↓/↑      move",
+		"  enter / l     open thread",
+		"  g / G         top / bottom",
+		"  h / esc       back",
+		"  r             refresh feed",
+		"",
+		s.accent.Render("Actions"),
+		"  c / n         compose",
+		"  R             reply to selected",
+		"  L             like / unlike",
+		"  p             author profile",
+		"",
+		s.accent.Render("Account & look"),
+		"  a             login / demo / OAuth",
+		"  t             theme picker",
+		"  T             cycle theme",
+		"  ?             this help",
+		"  q             quit (or back)",
+		"",
+		s.accent.Render("CLI (outside TUI)"),
+		"  threadterm feed --json",
+		"  threadterm post \"hello\"",
+		"  threadterm login",
+		"  threadterm search golang",
+		"  threadterm doctor",
+		"",
+		s.muted.Render("Auth guide: docs/AUTH.md · Launch copy: docs/LAUNCH_X.md"),
+		s.hint.Render("esc / ? to close"),
+	}, "\n")
+}
+
+func (m Model) renderPostCard(p models.Post, selected bool) string {
+	s := m.styles
+	w := max(36, m.vp.Width-4)
+	handle := s.accent.Render("@" + p.Username)
+	ago := s.muted.Render(relTime(p.Timestamp))
 	meta := fmt.Sprintf("%s  %s", handle, ago)
 	if p.TopicTag != "" {
-		meta += "  " + tagStyle.Render("#"+p.TopicTag)
+		meta += "  " + s.tag.Render("#"+p.TopicTag)
 	}
 	text := wordWrap(p.Text, w-4)
-	stats := mutedStyle.Render(fmt.Sprintf("♥ %s  💬 %s  ↻ %s", formatCount(p.LikeCount), formatCount(p.ReplyCount), formatCount(p.RepostCount)))
+	stats := s.muted.Render(fmt.Sprintf("♥ %s   💬 %s   ↻ %s", formatCount(p.LikeCount), formatCount(p.ReplyCount), formatCount(p.RepostCount)))
 	if p.LikedByMe {
-		stats = accentStyle.Render(fmt.Sprintf("♥ %s", formatCount(p.LikeCount))) + mutedStyle.Render(fmt.Sprintf("  💬 %s  ↻ %s", formatCount(p.ReplyCount), formatCount(p.RepostCount)))
+		stats = s.accent.Render(fmt.Sprintf("♥ %s", formatCount(p.LikeCount))) + s.muted.Render(fmt.Sprintf("   💬 %s   ↻ %s", formatCount(p.ReplyCount), formatCount(p.RepostCount)))
 	}
 	inner := meta + "\n" + text + "\n" + stats
 	if selected {
-		return selectedCard.Width(w).Render(inner)
+		return s.selected.Width(w).Render(inner)
 	}
-	return card.Width(w).Render(inner)
+	return s.card.Width(w).Render(inner)
 }
-
-var (
-	brandStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0A0A0A")).Background(lipgloss.Color("#E8E6E1"))
-	modeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#E8E6E1")).Background(lipgloss.Color("#2A5A4A"))
-	accentStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#3D9B7A")).Bold(true)
-	mutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7A7A72"))
-	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#C45C4A"))
-	tagStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#C4A35A"))
-	sectionStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0A0A0A")).Background(lipgloss.Color("#3D9B7A"))
-	footerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#9A9A90"))
-	card         = lipgloss.NewStyle().Padding(0, 1).MarginLeft(1).Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("#2A2A28"))
-	selectedCard = lipgloss.NewStyle().Padding(0, 1).MarginLeft(1).Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("#3D9B7A")).Background(lipgloss.Color("#141816"))
-	composeBox   = lipgloss.NewStyle().Padding(1, 2).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#3D9B7A"))
-)
-
-const helpText = `
-  KEYBOARD
-
-  j/k · ↓/↑     move
-  enter / l     open thread
-  c / n         compose
-  R             reply to selected
-  L             like / unlike
-  p             open author profile
-  r             refresh feed
-  g / G         top / bottom
-  h / esc       back
-  ?             this help
-  q             quit (or back)
-
-  CLI
-
-  threadterm                  open TUI
-  threadterm feed --json
-  threadterm post "hello"
-  threadterm search "golang"
-  threadterm login
-  threadterm whoami
-
-  AUTH
-
-  Demo mode works offline (default).
-  Live mode: Meta Threads Graph API token.
-  See docs/AUTH.md
-`
 
 func relTime(t time.Time) string {
 	if t.IsZero() {
@@ -535,6 +966,9 @@ func wordWrap(s string, width int) string {
 	if width < 20 {
 		width = 20
 	}
+	if strings.Contains(s, "\n") {
+		return strings.TrimSpace(s)
+	}
 	words := strings.Fields(s)
 	if len(words) == 0 {
 		return s
@@ -556,10 +990,6 @@ func wordWrap(s string, width int) string {
 	if line != "" {
 		lines = append(lines, line)
 	}
-	// preserve intentional newlines roughly
-	if strings.Contains(s, "\n") {
-		return strings.TrimSpace(s)
-	}
 	return strings.Join(lines, "\n")
 }
 
@@ -578,8 +1008,8 @@ func max(a, b int) int {
 }
 
 // Run starts the Bubble Tea program.
-func Run(client api.Client) error {
-	p := tea.NewProgram(New(client), tea.WithAltScreen())
+func Run(cfg *config.Config, client api.Client) error {
+	p := tea.NewProgram(New(cfg, client), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }

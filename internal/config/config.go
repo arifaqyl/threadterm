@@ -8,11 +8,12 @@ import (
 )
 
 const (
-	EnvAccessToken = "THREADTERM_ACCESS_TOKEN"
-	EnvUserID      = "THREADTERM_USER_ID"
-	EnvClientID    = "THREADTERM_CLIENT_ID"
+	EnvAccessToken  = "THREADTERM_ACCESS_TOKEN"
+	EnvUserID       = "THREADTERM_USER_ID"
+	EnvClientID     = "THREADTERM_CLIENT_ID"
 	EnvClientSecret = "THREADTERM_CLIENT_SECRET"
-	EnvDemo        = "THREADTERM_DEMO"
+	EnvDemo         = "THREADTERM_DEMO"
+	EnvTheme        = "THREADTERM_THEME"
 )
 
 // Config holds local threadterm settings.
@@ -23,6 +24,8 @@ type Config struct {
 	ClientID     string `json:"client_id,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
 	Demo         bool   `json:"demo,omitempty"`
+	Theme        string `json:"theme,omitempty"`
+	SeenWelcome  bool   `json:"seen_welcome,omitempty"`
 }
 
 func Dir() (string, error) {
@@ -46,7 +49,7 @@ func Path() (string, error) {
 }
 
 func Load() (*Config, error) {
-	cfg := &Config{}
+	cfg := &Config{Theme: "jade"}
 	path, err := Path()
 	if err != nil {
 		return nil, err
@@ -70,8 +73,14 @@ func Load() (*Config, error) {
 	if v := os.Getenv(EnvClientSecret); v != "" {
 		cfg.ClientSecret = v
 	}
+	if v := os.Getenv(EnvTheme); v != "" {
+		cfg.Theme = v
+	}
 	if os.Getenv(EnvDemo) == "1" || os.Getenv(EnvDemo) == "true" {
 		cfg.Demo = true
+	}
+	if cfg.Theme == "" {
+		cfg.Theme = "jade"
 	}
 	return cfg, nil
 }
