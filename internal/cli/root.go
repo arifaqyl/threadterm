@@ -1,4 +1,4 @@
-package cli
+﻿package cli
 
 import (
 	"bufio"
@@ -25,7 +25,7 @@ var (
 func Execute() error {
 	root := &cobra.Command{
 		Use:   "threadterm",
-		Short: "Threads in your terminal — TUI + CLI",
+		Short: "Threads in your terminal â€” TUI + CLI",
 		Long: `threadterm is a hybrid Threads client.
 
   threadterm                 open the TUI
@@ -101,7 +101,7 @@ func cmdFeed() *cobra.Command {
 				return printJSON(page)
 			}
 			for _, p := range page.Posts {
-				fmt.Printf("%s  @%s  ♥%d\n  %s\n\n", p.ID, p.Username, p.LikeCount, indent(p.Text, 2))
+				fmt.Printf("%s  @%s  â™¥%d\n  %s\n\n", p.ID, p.Username, p.LikeCount, indent(p.Text, 2))
 			}
 			return nil
 		},
@@ -154,7 +154,7 @@ func cmdThread() *cobra.Command {
 			}
 			fmt.Printf("@%s\n%s\n\n", th.Root.Username, th.Root.Text)
 			for _, r := range th.Replies {
-				fmt.Printf("  └ @%s: %s\n", r.Username, r.Text)
+				fmt.Printf("  â”” @%s: %s\n", r.Username, r.Text)
 			}
 			return nil
 		},
@@ -250,47 +250,40 @@ func cmdLogin() *cobra.Command {
 	var (
 		token, userID string
 		port          int
-		cookies       string
+		cookieString  string
 		sessionID     string
 		csrf          string
 		dsUser        string
 		mid, igDid    string
 		user, pass    string
 		totp          string
+		cookieMode    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in with username + password (normal terminal login)",
-		Long: `Normal login (recommended):
+		Short: "Log in (password, or --cookies if Meta blocks password)",
+		Long: `Login options:
 
-  threadterm login
-  # prompts for username + password
+  threadterm login              # username + password
+  threadterm login --cookies    # guided browser cookies (most reliable)
 
-  threadterm login --user you --password 'secret'
-
-That's it. Home feed, post, like, reply — no Meta developer app.
-
-If you have authenticator 2FA:
-  threadterm login --user you --password '…' --totp YOUR_APP_SECRET
-
-Optional extras:
-  --cookies "…"     also attach browser cookies (better profile search)
-  --token / OAuth   official Graph API (needs Meta app)`,
+If password login fails with "no Bearer token" / unexpected error,
+Meta blocked the device — use --cookies (30 seconds).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
 
-			// Cookie paste (optional boost)
-			if cookies != "" {
-				if err := auth.SetSessionFromPaste(cfg, cookies); err != nil {
+			if cookieMode {
+				return auth.GuidedCookieLogin(cfg)
+			}
+
+			if cookieString != "" {
+				if err := auth.SetSessionFromPaste(cfg, cookieString); err != nil {
 					return err
 				}
 				fmt.Printf("cookies saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
-				if !cfg.HasBearer() {
-					fmt.Println("tip: run threadterm login  (username + password) for posting")
-				}
 				return nil
 			}
 			if sessionID != "" {
@@ -308,7 +301,6 @@ Optional extras:
 				return nil
 			}
 
-			// Official token
 			if token != "" {
 				if userID == "" {
 					return fmt.Errorf("--user-id required with --token")
@@ -320,11 +312,11 @@ Optional extras:
 				return nil
 			}
 
-			// Interactive username/password (default when no other auth flags)
-			wantInteractive := user == "" && pass == "" && cookies == "" && sessionID == "" && token == ""
+			wantInteractive := user == "" && pass == "" && cookieString == "" && sessionID == "" && token == ""
 			if wantInteractive {
 				fmt.Println("threadterm login")
 				fmt.Println("Enter your Threads / Instagram username and password.")
+				fmt.Println("(If Meta blocks this, we'll switch to easy cookie login.)")
 				fmt.Println()
 				user, err = promptLine("username: ")
 				if err != nil {
@@ -348,7 +340,16 @@ Optional extras:
 				}
 				fmt.Println("logging in…")
 				if err := auth.LoginPasswordTOTP(cfg, user, pass, totp); err != nil {
-					return err
+					fmt.Println()
+					fmt.Println(auth.ExplainLoginFailure(err))
+					fmt.Println()
+					fmt.Print("Switch to cookie login now? [Y/n] ")
+					ans, _ := promptLine("")
+					ans = strings.ToLower(strings.TrimSpace(ans))
+					if ans == "" || ans == "y" || ans == "yes" {
+						return auth.GuidedCookieLogin(cfg)
+					}
+					return auth.ExplainLoginFailure(err)
 				}
 				fmt.Printf("logged in as @%s · mode=%s\n", cfg.Username, cfg.Mode())
 				fmt.Println("try:  threadterm          # TUI")
@@ -357,10 +358,11 @@ Optional extras:
 				return nil
 			}
 
-			return fmt.Errorf("nothing to do — run: threadterm login")
+			return fmt.Errorf("nothing to do — run: threadterm login   or   threadterm login --cookies")
 		},
 	}
-	cmd.Flags().StringVar(&cookies, "cookies", "", "optional: raw Cookie header from threads.com")
+	cmd.Flags().BoolVar(&cookieMode, "cookies", false, "guided browser-cookie login (most reliable)")
+	cmd.Flags().StringVar(&cookieString, "cookie-string", "", "optional: raw Cookie header from threads.com")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "optional sessionid cookie")
 	cmd.Flags().StringVar(&csrf, "csrf", "", "optional csrftoken cookie")
 	cmd.Flags().StringVar(&dsUser, "ds-user-id", "", "optional ds_user_id cookie")
@@ -372,9 +374,9 @@ Optional extras:
 	cmd.Flags().StringVar(&token, "token", "", "official Graph access token (optional)")
 	cmd.Flags().StringVar(&userID, "user-id", "", "official Graph user id")
 	cmd.Flags().IntVar(&port, "port", 8765, "localhost OAuth callback port")
+	_ = port
 	return cmd
 }
-
 func cmdLogout() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
@@ -390,7 +392,7 @@ func cmdLogout() *cobra.Command {
 			if err := cfg.Save(); err != nil {
 				return err
 			}
-			fmt.Println("logged out · demo mode")
+			fmt.Println("logged out Â· demo mode")
 			return nil
 		},
 	}
@@ -431,7 +433,7 @@ func cmdTheme() *cobra.Command {
 					return printJSON(map[string]any{"theme": cfg.Theme, "available": []string{"jade", "ocean", "ember", "mono", "orchid"}})
 				}
 				fmt.Println("current:", cfg.Theme)
-				fmt.Println("available: jade · ocean · ember · mono · orchid")
+				fmt.Println("available: jade Â· ocean Â· ember Â· mono Â· orchid")
 				fmt.Println("tip: press t inside the TUI, or T to cycle")
 				return nil
 			}
@@ -517,7 +519,7 @@ func mask(s string) string {
 	if len(s) < 8 {
 		return "***"
 	}
-	return s[:4] + "…" + s[len(s)-4:]
+	return s[:4] + "â€¦" + s[len(s)-4:]
 }
 
 func boolStr(v bool) string {

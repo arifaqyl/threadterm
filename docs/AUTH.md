@@ -1,70 +1,63 @@
 # Auth
 
-## Normal login (do this)
+## Reality check (Jul 2026)
 
-```bash
-threadterm login
+Meta often **blocks password login from new devices/CLIs** with:
+
+> Unable to log in / An unexpected error occurred
+
+That is **not** “wrong password”. It’s a risk/checkpoint response with no token.
+
+So threadterm supports two paths:
+
+| Path | Command | Reliability |
+|------|---------|-------------|
+| **Cookies (recommended when password fails)** | `threadterm login --cookies` | high |
+| Password | `threadterm login` | works until Meta blocks the device |
+| Official Graph | `--token` | needs Meta developer app |
+
+---
+
+## Easy login (do this now)
+
+```powershell
+D:\threadterm\threadterm.exe login --cookies
 ```
 
-It asks for:
+It opens Threads and asks you to paste:
 
-```
-username:
-password:
-2FA secret (optional, Enter to skip):
-```
-
-That’s it. No Meta developer app. No DevTools. No cookie paste.
+1. Open https://www.threads.com (already logged in)
+2. Press **F12** → **Application** → **Cookies** → `www.threads.com`
+3. Copy **sessionid**, **csrftoken**, **ds_user_id** (mid + ig_did nice to have)
+4. Paste when prompted
 
 Then:
 
-```bash
-threadterm            # TUI — home feed
-threadterm feed
-threadterm post "hi"
+```powershell
+D:\threadterm\threadterm.exe
+D:\threadterm\threadterm.exe feed
 ```
-
-Or non-interactive:
-
-```bash
-threadterm login --user you --password 'secret'
-# with authenticator 2FA:
-threadterm login --user you --password 'secret' --totp YOUR_APP_SECRET
-```
-
-In the TUI: press **`a`** → **1** → type username + password.
 
 ---
 
-## What you get
+## Password login
 
-| After password login | Works? |
-|----------------------|--------|
-| Home / For You feed | yes |
-| Post | yes |
-| Like / reply | yes |
-| Search / other profiles | better with optional cookies |
-
----
-
-## Optional: cookies
-
-Only if you want richer profile search:
-
-```bash
-threadterm login --cookies "sessionid=…; csrftoken=…; ds_user_id=…"
+```powershell
+D:\threadterm\threadterm.exe login
 ```
 
-## Optional: official Graph API
+If it fails, it offers to switch to cookie login automatically.
 
-Only if you already have a Meta Threads app — see older docs / `--token`.
+2FA:
+
+```powershell
+threadterm login --user YOU --password '…' --totp YOUR_AUTH_SECRET
+```
 
 ---
 
-## If login fails
+## Security
 
-- **2FA** → pass `--totp` with your authenticator app secret  
-- **Checkpoint / suspicious login** → Meta blocked the device; try again later, same network as your phone, or approve the login in the Instagram app  
-- **Wrong password** → use your Instagram password (Threads shares it)
-
-Sessions are saved in `~/.threadterm/config.json` (mode `0600`).
+- Never paste passwords into chat.
+- If you did, **change the Instagram/Threads password now**.
+- `~/.threadterm/config.json` is mode `0600` — don’t commit it.
