@@ -1,13 +1,14 @@
 # threadterm
 
-**Threads in your terminal.** Cookie login. No Meta developer app.
+**Threads in your terminal.** Just `threadterm login` — username + password.
 
-Hybrid TUI + CLI — same idea as Twitter/X CLIs (`bird`, etc.): use your browser session, not OAuth theater. Built with Go + Bubble Tea.
+Hybrid TUI + CLI. No Meta developer app. Built with Go + Bubble Tea.
 
 ```bash
-threadterm --demo                 # zero setup
-threadterm login --cookies "…"    # live (from threads.com DevTools)
-threadterm feed --json            # agents
+threadterm login          # username + password (normal)
+threadterm                # TUI
+threadterm feed --json    # agents
+threadterm --demo         # try offline first
 ```
 
 > **Not affiliated with Meta.** Demo works offline. Live mode uses your session cookies (optional Bloks password for posting). Official Graph API is optional.
@@ -39,19 +40,17 @@ threadterm feed --json            # agents
 | `?` | help |
 | `q` | quit |
 
-### Login (no Meta app)
-
-1. Open https://www.threads.com (logged in)  
-2. DevTools → Application → Cookies  
-3. Press **`a`** in TUI → paste `sessionid; csrftoken; ds_user_id; mid; ig_did`  
-
-For posting: **`a`** → write login (username + password), or:
+### Login
 
 ```bash
-threadterm login --user YOU --password '…'
+threadterm login
+# username:
+# password:
 ```
 
-Full guide: [docs/AUTH.md](docs/AUTH.md)
+Or in TUI press **`a`** → username + password.
+
+Optional cookies / official Graph API: [docs/AUTH.md](docs/AUTH.md)
 
 ### Themes
 

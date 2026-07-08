@@ -164,21 +164,28 @@ func (c *Config) HasToken() bool {
 	return c.AccessToken != "" && c.UserID != ""
 }
 
-// Mode: session (cookies) > token (official) > demo
+// Mode priority: password/bearer > cookies > official token > demo
 func (c *Config) Mode() string {
 	if c.Demo {
 		return "demo"
 	}
-	if c.HasSession() {
-		if c.HasBearer() {
-			return "session+write"
+	if c.HasBearer() {
+		if c.HasSession() {
+			return "live"
 		}
+		return "live"
+	}
+	if c.HasSession() {
 		return "session"
 	}
 	if c.HasToken() {
 		return "token"
 	}
 	return "demo"
+}
+
+func (c *Config) IsLive() bool {
+	return !c.Demo && (c.HasBearer() || c.HasSession() || c.HasToken())
 }
 
 // ParseCookieHeader parses a raw Cookie header or "name=value; name2=value2" paste.

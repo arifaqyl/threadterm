@@ -6,48 +6,33 @@
 
 I built threadterm — Threads in your terminal.
 
-No Meta developer app.
-Paste browser cookies (like Twitter CLIs).
-TUI + CLI + --json for agents.
-Demo mode works offline.
+Just:
+```
+threadterm login
+```
+username + password. No Meta app. No cookie hustle.
 
+TUI + CLI + --json for agents.
 github.com/arifaqyl/threadterm
 
 **2/**
 
 ```
 go install github.com/arifaqyl/threadterm/cmd/threadterm@latest
-threadterm --demo
+threadterm --demo     # try offline
+threadterm login      # then go live
+threadterm
 ```
-
-Then press `a` → paste threads.com cookies.
-`t` for themes. `c` to compose.
 
 **3/**
 
 Agents:
-
 ```
 threadterm feed --json
 threadterm post "shipped" --json
 ```
 
-Same brain as bird/yarn — session auth, not OAuth theater.
-
 **4/**
 
-Not affiliated with Meta.
-Private session API can break. Demo always works.
+Not affiliated with Meta. Private login can hit 2FA/checkpoints — we document it.
 Star if you want Homebrew next ⭐
-
----
-
-## Short
-
-```
-threadterm — Threads TUI + agent CLI.
-
-Cookie login (no Meta app). Demo offline.
-go install github.com/arifaqyl/threadterm/cmd/threadterm@latest
-threadterm --demo
-```

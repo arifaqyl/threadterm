@@ -53,9 +53,15 @@ func SetSessionFromPaste(cfg *config.Config, raw string) error {
 	return SetSession(cfg, config.ParseCookieHeader(raw))
 }
 
-// LoginPassword runs Bloks login for write access (post/like/reply) and
-// stores the Bearer token. Optionally keeps existing cookies for reads.
+// LoginPassword is the normal path: username + password in the terminal.
+// Uses Instagram Bloks login (same as the mobile app). Gives home feed,
+// post, like, reply — no Meta developer app, no cookie hunting.
 func LoginPassword(cfg *config.Config, username, password string) error {
+	return LoginPasswordTOTP(cfg, username, password, "")
+}
+
+// LoginPasswordTOTP same as LoginPassword but auto-solves authenticator 2FA.
+func LoginPasswordTOTP(cfg *config.Config, username, password, totpSecret string) error {
 	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
 	if username == "" || password == "" {
 		return fmt.Errorf("username and password required")
@@ -64,9 +70,17 @@ func LoginPassword(cfg *config.Config, username, password string) error {
 	if deviceID == "" {
 		deviceID = threads.GenerateDeviceID()
 	}
-	res, err := threads.Login(context.Background(), username, password, deviceID)
+	res, err := threads.LoginWith(context.Background(), threads.LoginParams{
+		Username:   username,
+		Password:   password,
+		DeviceID:   deviceID,
+		TOTPSecret: strings.TrimSpace(totpSecret),
+	})
 	if err != nil {
-		return fmt.Errorf("bloks login failed: %w", err)
+		return fmt.Errorf("login failed: %w\n\nIf your account has 2FA, run:\n  threadterm login --user YOU --password '…' --totp YOUR_AUTH_SECRET\nOr use authenticator app secret from Instagram 2FA settings.", err)
+	}
+	if res.Token == "" || res.UserID == "" {
+		return fmt.Errorf("login returned empty credentials — Meta may have challenged this login (checkpoint). Try again later or from the same network you usually use Instagram")
 	}
 	cfg.Bearer = config.BearerAuth{
 		Token:    res.Token,
@@ -74,13 +88,12 @@ func LoginPassword(cfg *config.Config, username, password string) error {
 		DeviceID: deviceID,
 	}
 	cfg.Demo = false
-	if cfg.Username == "" {
+	if res.Username != "" {
+		cfg.Username = res.Username
+	} else {
 		cfg.Username = username
 	}
-	if cfg.UserID == "" {
-		cfg.UserID = res.UserID
-	}
-	// If we have no cookies yet, user can still write; reads need cookies.
+	cfg.UserID = res.UserID
 	return cfg.Save()
 }
 

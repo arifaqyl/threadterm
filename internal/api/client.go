@@ -30,18 +30,20 @@ type Client interface {
 	Unlike(id string) error
 }
 
-// New picks backend: demo → session cookies (primary) → official Graph token.
+// New picks backend: demo → password/session (primary) → official Graph token.
 func New(cfg *config.Config) Client {
-	mode := cfg.Mode()
-	if mode == "demo" {
+	if cfg.Demo {
 		return &demoAdapter{store: demo.New()}
 	}
-	if cfg.HasSession() {
+	if cfg.HasBearer() || cfg.HasSession() {
 		sc, err := newSessionClient(cfg)
 		if err == nil {
 			return sc
 		}
-		// fall through if cookies incomplete/invalid constructor
+		// If live auth is broken, surface demo only when nothing else works.
+		if !cfg.HasToken() {
+			return &brokenClient{err: err, mode: cfg.Mode(), user: cfg.Username}
+		}
 	}
 	if cfg.HasToken() {
 		return &graphClient{
@@ -52,6 +54,35 @@ func New(cfg *config.Config) Client {
 	}
 	return &demoAdapter{store: demo.New()}
 }
+
+// brokenClient surfaces constructor errors instead of silently falling to demo.
+type brokenClient struct {
+	err  error
+	mode string
+	user string
+}
+
+func (b *brokenClient) AuthStatus() models.AuthStatus {
+	return models.AuthStatus{Mode: b.mode, Username: b.user, Ready: false}
+}
+func (b *brokenClient) Feed(string, int) (models.FeedPage, error) {
+	return models.FeedPage{}, b.err
+}
+func (b *brokenClient) Thread(string) (models.Thread, error) { return models.Thread{}, b.err }
+func (b *brokenClient) Profile(string) (models.User, []models.Post, error) {
+	return models.User{}, nil, b.err
+}
+func (b *brokenClient) Search(string, int) (models.FeedPage, error) {
+	return models.FeedPage{}, b.err
+}
+func (b *brokenClient) Publish(string) (models.PublishResult, error) {
+	return models.PublishResult{}, b.err
+}
+func (b *brokenClient) Reply(string, string) (models.PublishResult, error) {
+	return models.PublishResult{}, b.err
+}
+func (b *brokenClient) Like(string) error   { return b.err }
+func (b *brokenClient) Unlike(string) error { return b.err }
 
 type demoAdapter struct {
 	store *demo.Store

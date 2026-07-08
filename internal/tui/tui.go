@@ -381,16 +381,16 @@ func (m Model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.loginStep {
 	case 0: // menu
 		switch msg.String() {
-		case "1", "c":
-			m.loginStep = 1
-			m.cookieInput.SetValue("")
-			m.cookieInput.Focus()
-			m.err = ""
-			return m, textinput.Blink
-		case "2", "w":
+		case "1", "w":
 			m.loginStep = 2
 			m.userInput.SetValue(m.cfg.Username)
 			m.userInput.Focus()
+			m.err = ""
+			return m, textinput.Blink
+		case "2", "c":
+			m.loginStep = 1
+			m.cookieInput.SetValue("")
+			m.cookieInput.Focus()
 			m.err = ""
 			return m, textinput.Blink
 		case "3", "o":
@@ -805,23 +805,23 @@ func (m Model) renderWelcome() string {
 		s.brand.Render(" threadterm "),
 		"",
 		s.title.Render("Threads in your terminal"),
-		s.muted.Render("TUI + CLI · demo offline · official API when live"),
+		s.muted.Render("TUI + CLI · demo offline · username+password login"),
 		"",
 		s.accent.Render("How to use"),
 		"  j/k     move through posts",
 		"  enter   open a thread",
 		"  c       compose a post",
 		"  R       reply · L like · p profile",
-		"  a       login (token or OAuth)",
+		"  a       login (username + password)",
 		"  t       pick a color theme",
 		"  ?       full help · q quit",
 		"",
 		s.accent.Render("Get started"),
 		"  1  enter   browse demo feed",
-		"  2  l       login to your Threads",
+		"  2  l       login with username + password",
 		"  3  t       choose a theme first",
 		"",
-		s.hint.Render("Live mode = paste threads.com cookies. No developer account."),
+		s.hint.Render("Or in a terminal:  threadterm login"),
 	}, "\n")
 
 	content := box.Render(body)
@@ -836,25 +836,23 @@ func (m Model) renderLogin() string {
 		body = strings.Join([]string{
 			s.section.Render(" LOGIN "),
 			"",
-			"No Meta developer app needed.",
-			"Same idea as Twitter/X CLIs: use your browser session.",
+			"Normal login — username + password.",
+			"No Meta developer app. No cookie hunting.",
 			"",
-			s.accent.Render("1 / c") + "  Paste cookies from threads.com  ← recommended",
-			s.accent.Render("2 / w") + "  Write login (username + password)",
+			s.accent.Render("1 / w") + "  Username + password  ← do this",
+			s.accent.Render("2 / c") + "  Paste cookies (optional extra)",
 			s.accent.Render("3 / o") + "  Official Graph token (optional)",
 			s.accent.Render("4 / d") + "  Stay in demo mode",
 			"",
-			s.muted.Render("Cookies = read feeds/profiles"),
-			s.muted.Render("Write login = post / like / reply"),
+			s.muted.Render("Password login → home feed + post + like + reply"),
 			s.muted.Render("docs/AUTH.md  ·  esc back"),
 		}, "\n")
 	case 1:
 		body = strings.Join([]string{
 			s.section.Render(" COOKIES "),
 			"",
-			"1. Open https://www.threads.com (logged in)",
-			"2. DevTools → Application → Cookies",
-			"3. Paste sessionid + csrftoken + ds_user_id (+ mid, ig_did)",
+			"Optional. Password login is enough for most things.",
+			"Paste only if you want better profile search.",
 			"",
 			m.cookieInput.View(),
 			"",
@@ -862,9 +860,9 @@ func (m Model) renderLogin() string {
 		}, "\n")
 	case 2:
 		body = strings.Join([]string{
-			s.section.Render(" WRITE LOGIN "),
+			s.section.Render(" USERNAME "),
 			"",
-			"Username (Instagram / Threads):",
+			"Threads / Instagram username:",
 			"",
 			m.userInput.View(),
 			"",
@@ -874,12 +872,12 @@ func (m Model) renderLogin() string {
 		body = strings.Join([]string{
 			s.section.Render(" PASSWORD "),
 			"",
-			"Password (sent to Instagram Bloks login — not Meta Graph):",
+			"Password (hidden):",
 			"",
 			m.passInput.View(),
 			"",
 			s.muted.Render("enter login · esc back"),
-			s.hint.Render("May hit checkpoint 2FA — use cookies-only if so."),
+			s.hint.Render("2FA? use: threadterm login --totp SECRET"),
 		}, "\n")
 	case 4:
 		body = strings.Join([]string{

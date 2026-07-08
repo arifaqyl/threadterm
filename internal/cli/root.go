@@ -1,16 +1,19 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/arifaqyl/threadterm/internal/api"
 	"github.com/arifaqyl/threadterm/internal/auth"
 	"github.com/arifaqyl/threadterm/internal/config"
 	"github.com/arifaqyl/threadterm/internal/tui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -253,38 +256,41 @@ func cmdLogin() *cobra.Command {
 		dsUser        string
 		mid, igDid    string
 		user, pass    string
+		totp          string
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Login via browser cookies (recommended) or password / official OAuth",
-		Long: `Primary path (no Meta developer app):
+		Short: "Log in with username + password (normal terminal login)",
+		Long: `Normal login (recommended):
 
-  1. Open https://www.threads.com logged in
-  2. DevTools → Application → Cookies → copy values
-  3. threadterm login --cookies "sessionid=...; csrftoken=...; ds_user_id=...; mid=...; ig_did=..."
+  threadterm login
+  # prompts for username + password
 
-Or paste individually:
-  threadterm login --session-id ... --csrf ... --ds-user-id ... --mid ... --ig-did ...
+  threadterm login --user you --password 'secret'
 
-Write access (post/like/reply) — Bloks password login:
-  threadterm login --user yourname --password '...'
+That's it. Home feed, post, like, reply — no Meta developer app.
 
-Official Graph API (optional):
-  threadterm login --token ... --user-id ...
-  threadterm login   # OAuth if CLIENT_ID/SECRET set`,
+If you have authenticator 2FA:
+  threadterm login --user you --password '…' --totp YOUR_APP_SECRET
+
+Optional extras:
+  --cookies "…"     also attach browser cookies (better profile search)
+  --token / OAuth   official Graph API (needs Meta app)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
 
-			// Cookie paste (primary)
+			// Cookie paste (optional boost)
 			if cookies != "" {
 				if err := auth.SetSessionFromPaste(cfg, cookies); err != nil {
 					return err
 				}
-				fmt.Printf("session saved · @%s (%s) · mode=%s\n", cfg.Username, cfg.UserID, cfg.Mode())
-				fmt.Println("tip: for posting, also run: threadterm login --user YOU --password '…'")
+				fmt.Printf("cookies saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
+				if !cfg.HasBearer() {
+					fmt.Println("tip: run threadterm login  (username + password) for posting")
+				}
 				return nil
 			}
 			if sessionID != "" {
@@ -298,22 +304,7 @@ Official Graph API (optional):
 				if err := auth.SetSession(cfg, sc); err != nil {
 					return err
 				}
-				fmt.Printf("session saved · @%s (%s) · mode=%s\n", cfg.Username, cfg.UserID, cfg.Mode())
-				return nil
-			}
-
-			// Password → bearer writes
-			if user != "" {
-				if pass == "" {
-					return fmt.Errorf("--password required with --user")
-				}
-				if err := auth.LoginPassword(cfg, user, pass); err != nil {
-					return err
-				}
-				fmt.Printf("write auth saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
-				if !cfg.HasSession() {
-					fmt.Println("note: add browser cookies for reading feeds (login --cookies …)")
-				}
+				fmt.Printf("cookies saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
 				return nil
 			}
 
@@ -329,23 +320,55 @@ Official Graph API (optional):
 				return nil
 			}
 
-			// Official OAuth fallback
-			cfg, err = auth.LoginLocalhost(cfg, port)
-			if err != nil {
-				return fmt.Errorf("%w\n\nprefer: threadterm login --cookies \"sessionid=…; csrftoken=…; ds_user_id=…\"", err)
+			// Interactive username/password (default when no other auth flags)
+			wantInteractive := user == "" && pass == "" && cookies == "" && sessionID == "" && token == ""
+			if wantInteractive {
+				fmt.Println("threadterm login")
+				fmt.Println("Enter your Threads / Instagram username and password.")
+				fmt.Println()
+				user, err = promptLine("username: ")
+				if err != nil {
+					return err
+				}
+				pass, err = promptPassword("password: ")
+				if err != nil {
+					return err
+				}
+				t, _ := promptLine("2FA secret (optional, Enter to skip): ")
+				totp = strings.TrimSpace(t)
 			}
-			fmt.Printf("logged in as @%s (%s)\n", cfg.Username, cfg.UserID)
-			return nil
+
+			if user != "" {
+				if pass == "" {
+					var err error
+					pass, err = promptPassword("password: ")
+					if err != nil {
+						return err
+					}
+				}
+				fmt.Println("logging in…")
+				if err := auth.LoginPasswordTOTP(cfg, user, pass, totp); err != nil {
+					return err
+				}
+				fmt.Printf("logged in as @%s · mode=%s\n", cfg.Username, cfg.Mode())
+				fmt.Println("try:  threadterm          # TUI")
+				fmt.Println("      threadterm feed")
+				fmt.Println("      threadterm post \"hello\"")
+				return nil
+			}
+
+			return fmt.Errorf("nothing to do — run: threadterm login")
 		},
 	}
-	cmd.Flags().StringVar(&cookies, "cookies", "", "raw Cookie header paste from threads.com DevTools")
-	cmd.Flags().StringVar(&sessionID, "session-id", "", "sessionid cookie")
-	cmd.Flags().StringVar(&csrf, "csrf", "", "csrftoken cookie")
-	cmd.Flags().StringVar(&dsUser, "ds-user-id", "", "ds_user_id cookie")
-	cmd.Flags().StringVar(&mid, "mid", "", "mid cookie")
-	cmd.Flags().StringVar(&igDid, "ig-did", "", "ig_did cookie")
-	cmd.Flags().StringVar(&user, "user", "", "Threads/IG username for write login")
-	cmd.Flags().StringVar(&pass, "password", "", "password for write login (Bloks)")
+	cmd.Flags().StringVar(&cookies, "cookies", "", "optional: raw Cookie header from threads.com")
+	cmd.Flags().StringVar(&sessionID, "session-id", "", "optional sessionid cookie")
+	cmd.Flags().StringVar(&csrf, "csrf", "", "optional csrftoken cookie")
+	cmd.Flags().StringVar(&dsUser, "ds-user-id", "", "optional ds_user_id cookie")
+	cmd.Flags().StringVar(&mid, "mid", "", "optional mid cookie")
+	cmd.Flags().StringVar(&igDid, "ig-did", "", "optional ig_did cookie")
+	cmd.Flags().StringVar(&user, "user", "", "Threads/IG username")
+	cmd.Flags().StringVar(&pass, "password", "", "password (omit to get a hidden prompt)")
+	cmd.Flags().StringVar(&totp, "totp", "", "authenticator 2FA secret (optional)")
 	cmd.Flags().StringVar(&token, "token", "", "official Graph access token (optional)")
 	cmd.Flags().StringVar(&userID, "user-id", "", "official Graph user id")
 	cmd.Flags().IntVar(&port, "port", 8765, "localhost OAuth callback port")
@@ -502,4 +525,35 @@ func boolStr(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func promptLine(label string) (string, error) {
+	fmt.Fprint(os.Stdout, label)
+	sc := bufio.NewScanner(os.Stdin)
+	if !sc.Scan() {
+		if err := sc.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("no input")
+	}
+	return strings.TrimSpace(sc.Text()), nil
+}
+
+func promptPassword(label string) (string, error) {
+	fmt.Fprint(os.Stdout, label)
+	// Hidden input when stdin is a terminal; plain fallback otherwise.
+	fd := int(syscall.Stdin)
+	if term.IsTerminal(fd) {
+		b, err := term.ReadPassword(fd)
+		fmt.Fprintln(os.Stdout)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+	sc := bufio.NewScanner(os.Stdin)
+	if !sc.Scan() {
+		return "", fmt.Errorf("no password")
+	}
+	return sc.Text(), nil
 }
