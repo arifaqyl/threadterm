@@ -1,94 +1,107 @@
-# Auth
+# Auth — no Meta developer app required
 
-threadterm supports two modes.
+threadterm’s **primary** live path is the same idea as Twitter/X CLIs (bird, etc.):
+use **your browser session cookies**. Official Graph API is optional.
 
-## Demo (default)
+## Modes
 
-No credentials. Offline synthetic feed for trying the TUI and CLI.
+| Mode | Needs | Can do |
+|------|-------|--------|
+| **demo** | nothing | full TUI offline |
+| **session** | browser cookies | read feed / profiles / threads |
+| **session+write** | cookies + password (Bloks) | also post / like / reply |
+| **token** | Meta app + Graph token | official API (optional) |
 
-```bash
-threadterm --demo
-# or
-export THREADTERM_DEMO=1
-```
+---
 
-## Live — Meta Threads Graph API
+## 1. Cookie login (recommended)
 
-Uses the **official** Threads API (`graph.threads.net`). This is the supported path for publishing and reading **your** media.
+1. Open [https://www.threads.com](https://www.threads.com) while logged in  
+2. DevTools → **Application** → **Cookies** → `https://www.threads.com`  
+3. Copy these values (paste as one Cookie string):
 
-### 1. Create a Meta app
+| Cookie | Required |
+|--------|----------|
+| `sessionid` | yes |
+| `csrftoken` | yes |
+| `ds_user_id` | yes |
+| `mid` | recommended |
+| `ig_did` | recommended |
 
-1. Open [Meta Developer Console](https://developers.facebook.com/)
-2. Create an app and add the **Threads** product
-3. Note **Threads App ID** and **Threads App Secret**
-4. Under Threads → settings, add OAuth redirect:
-   - `http://127.0.0.1:8765/callback`
-
-### 2. Scopes threadterm requests
-
-```
-threads_basic
-threads_content_publish
-threads_read_replies
-threads_manage_replies
-threads_manage_insights
-threads_keyword_search
-```
-
-Keyword search and some reply features require app review / advanced access depending on Meta’s current policy. Without them, `search` falls back to filtering your own threads.
-
-### 3. Login
+### CLI
 
 ```bash
-export THREADTERM_CLIENT_ID=your_threads_app_id
-export THREADTERM_CLIENT_SECRET=your_threads_app_secret
+threadterm login --cookies "sessionid=...; csrftoken=...; ds_user_id=...; mid=...; ig_did=..."
+```
+
+Or flags:
+
+```bash
+threadterm login --session-id "..." --csrf "..." --ds-user-id "..." --mid "..." --ig-did "..."
+```
+
+Env vars also work:
+
+```bash
+export THREADS_SESSIONID=...
+export THREADS_CSRFTOKEN=...
+export THREADS_DS_USER_ID=...
+export THREADS_MID=...
+export THREADS_IG_DID=...
+```
+
+### TUI
+
+Press **`a`** → **1 / c** → paste → enter.
+
+---
+
+## 2. Write login (post / like / reply)
+
+Cookies alone are **read**. To publish:
+
+```bash
+threadterm login --user yourname --password 'yourpassword'
+```
+
+Or in TUI: **`a`** → **2 / w**.
+
+This uses Instagram’s Bloks login (same private surface mobile apps use).  
+It may hit **2FA / checkpoint**. If so, stay on cookies for reading and post from the app until we add challenge handling.
+
+---
+
+## 3. Official Graph API (optional)
+
+Only if you already have a Meta Threads app:
+
+```bash
+export THREADTERM_CLIENT_ID=...
+export THREADTERM_CLIENT_SECRET=...
 threadterm login
+# or
+threadterm login --token "..." --user-id "..."
 ```
 
-Browser opens → approve → token saved to `~/.threadterm/config.json` (mode `0600`).
+---
 
-### Manual token
+## Agent / automation
 
 ```bash
-threadterm login --token "THQV..." --user-id "1234567890"
+threadterm feed --json
+threadterm post "shipped from agent" --json
+threadterm whoami --json
 ```
 
-Or env vars (override file):
+Prefer env cookies in CI secrets — never commit `~/.threadterm/config.json`.
 
-```bash
-export THREADTERM_ACCESS_TOKEN=...
-export THREADTERM_USER_ID=...
-```
+---
 
-### Check
+## Honesty / risk
 
-```bash
-threadterm whoami
-threadterm doctor
-```
+- Cookie + private API paths can break when Meta changes endpoints.
+- Against Meta ToS if abused; use your own account, pace requests, don’t scrape at scale.
+- Sessions expire — re-paste cookies when `doctor` / feed fails.
+- Official API is stabler but needs a developer app (which most people don’t have).
 
-### Logout
-
-```bash
-threadterm logout
-```
-
-## What the official API cannot do
-
-Be honest in launch posts:
-
-| Want | Official API |
-|------|----------------|
-| Your posts / publish | ✅ |
-| Replies to your threads | ✅ (with scopes) |
-| Keyword search | ✅ (with `threads_keyword_search`) |
-| Full “For You” firehose | ❌ not exposed like the app |
-| Arbitrary public scrape | ❌ / against ToS |
-
-threadterm will **not** ship cookie-scraping as the default path. If an experimental public-browse backend is added later, it will be opt-in, documented, and clearly marked as unofficial / ToS-risk.
-
-## Security
-
-- Never commit `~/.threadterm/config.json` or `.env`
-- Prefer long-lived tokens from the OAuth exchange threadterm performs
-- Rotate secrets if leaked
+threadterm defaults to **demo** so anyone can try the TUI with zero setup.

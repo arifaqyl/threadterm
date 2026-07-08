@@ -30,16 +30,27 @@ type Client interface {
 	Unlike(id string) error
 }
 
-// New picks demo or live Graph API based on config.
+// New picks backend: demo → session cookies (primary) → official Graph token.
 func New(cfg *config.Config) Client {
-	if cfg.Mode() == "demo" {
+	mode := cfg.Mode()
+	if mode == "demo" {
 		return &demoAdapter{store: demo.New()}
 	}
-	return &graphClient{
-		cfg:    cfg,
-		http:   &http.Client{Timeout: 30 * time.Second},
-		fields: "id,text,username,permalink,timestamp,media_type,media_url,shortcode,thumbnail_url,children,is_quote_post",
+	if cfg.HasSession() {
+		sc, err := newSessionClient(cfg)
+		if err == nil {
+			return sc
+		}
+		// fall through if cookies incomplete/invalid constructor
 	}
+	if cfg.HasToken() {
+		return &graphClient{
+			cfg:    cfg,
+			http:   &http.Client{Timeout: 30 * time.Second},
+			fields: "id,text,username,permalink,timestamp,media_type,media_url,shortcode,thumbnail_url,children,is_quote_post",
+		}
+	}
+	return &demoAdapter{store: demo.New()}
 }
 
 type demoAdapter struct {

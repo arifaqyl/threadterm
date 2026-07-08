@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,16 +12,87 @@ import (
 	"time"
 
 	"github.com/arifaqyl/threadterm/internal/config"
+	threads "github.com/teslashibe/threads-go"
 )
 
 const (
-	authorizeURL = "https://threads.net/oauth/authorize"
-	tokenURL     = "https://graph.threads.net/oauth/access_token"
-	longLivedURL = "https://graph.threads.net/access_token"
+	authorizeURL  = "https://threads.net/oauth/authorize"
+	tokenURL      = "https://graph.threads.net/oauth/access_token"
+	longLivedURL  = "https://graph.threads.net/access_token"
 	defaultScopes = "threads_basic,threads_content_publish,threads_read_replies,threads_manage_replies,threads_manage_insights,threads_keyword_search"
 )
 
-// AuthURL builds the Meta Threads OAuth authorize URL.
+// SetSession saves browser cookies (primary live path — no Meta app).
+func SetSession(cfg *config.Config, cookies config.SessionCookies) error {
+	if cookies.SessionID == "" || cookies.CSRFToken == "" || cookies.DSUserID == "" {
+		return fmt.Errorf("need sessionid, csrftoken, and ds_user_id (mid + ig_did recommended)")
+	}
+	cfg.Session = cookies
+	cfg.Demo = false
+	cfg.UserID = cookies.DSUserID
+
+	// Best-effort username resolve
+	tc, err := threads.New(threads.Cookies{
+		SessionID: cookies.SessionID,
+		CSRFToken: cookies.CSRFToken,
+		DSUserID:  cookies.DSUserID,
+		Mid:       cookies.Mid,
+		IgDid:     cookies.IgDid,
+	})
+	if err == nil {
+		if me, err := tc.Me(context.Background()); err == nil && me != nil {
+			cfg.Username = me.Username
+			cfg.UserID = me.ID
+		}
+	}
+	return cfg.Save()
+}
+
+// SetSessionFromPaste accepts a raw Cookie header paste from DevTools.
+func SetSessionFromPaste(cfg *config.Config, raw string) error {
+	return SetSession(cfg, config.ParseCookieHeader(raw))
+}
+
+// LoginPassword runs Bloks login for write access (post/like/reply) and
+// stores the Bearer token. Optionally keeps existing cookies for reads.
+func LoginPassword(cfg *config.Config, username, password string) error {
+	username = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	if username == "" || password == "" {
+		return fmt.Errorf("username and password required")
+	}
+	deviceID := cfg.Bearer.DeviceID
+	if deviceID == "" {
+		deviceID = threads.GenerateDeviceID()
+	}
+	res, err := threads.Login(context.Background(), username, password, deviceID)
+	if err != nil {
+		return fmt.Errorf("bloks login failed: %w", err)
+	}
+	cfg.Bearer = config.BearerAuth{
+		Token:    res.Token,
+		UserID:   res.UserID,
+		DeviceID: deviceID,
+	}
+	cfg.Demo = false
+	if cfg.Username == "" {
+		cfg.Username = username
+	}
+	if cfg.UserID == "" {
+		cfg.UserID = res.UserID
+	}
+	// If we have no cookies yet, user can still write; reads need cookies.
+	return cfg.Save()
+}
+
+// ClearSession wipes session + bearer (back toward demo unless official token remains).
+func ClearSession(cfg *config.Config) error {
+	cfg.Session = config.SessionCookies{}
+	cfg.Bearer = config.BearerAuth{}
+	return cfg.Save()
+}
+
+// --- Official Graph OAuth (optional / advanced) ---
+
 func AuthURL(clientID, redirectURI, state string) string {
 	q := url.Values{}
 	q.Set("client_id", clientID)
@@ -33,7 +105,6 @@ func AuthURL(clientID, redirectURI, state string) string {
 	return authorizeURL + "?" + q.Encode()
 }
 
-// ExchangeCode swaps an auth code for a short-lived token, then upgrades to long-lived.
 func ExchangeCode(clientID, clientSecret, redirectURI, code string) (accessToken string, userID string, err error) {
 	form := url.Values{}
 	form.Set("client_id", clientID)
@@ -60,7 +131,6 @@ func ExchangeCode(clientID, clientSecret, redirectURI, code string) (accessToken
 	}
 	long, err := exchangeLongLived(clientSecret, short.AccessToken)
 	if err != nil {
-		// Still usable short-lived.
 		return short.AccessToken, fmt.Sprintf("%d", short.UserID), nil
 	}
 	return long, fmt.Sprintf("%d", short.UserID), nil
@@ -89,10 +159,9 @@ func exchangeLongLived(clientSecret, shortToken string) (string, error) {
 	return out.AccessToken, nil
 }
 
-// LoginLocalhost runs a one-shot OAuth callback on 127.0.0.1 and saves config.
 func LoginLocalhost(cfg *config.Config, port int) (*config.Config, error) {
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
-		return nil, fmt.Errorf("set THREADTERM_CLIENT_ID and THREADTERM_CLIENT_SECRET (Meta Threads App)")
+		return nil, fmt.Errorf("official OAuth needs THREADTERM_CLIENT_ID + CLIENT_SECRET (prefer cookie login instead)")
 	}
 	if port == 0 {
 		port = 8765
@@ -133,9 +202,7 @@ func LoginLocalhost(cfg *config.Config, port int) (*config.Config, error) {
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
-	defer func() {
-		_ = srv.Close()
-	}()
+	defer func() { _ = srv.Close() }()
 
 	fmt.Println("Open this URL to authorize threadterm:")
 	fmt.Println(authURL)
@@ -151,10 +218,7 @@ func LoginLocalhost(cfg *config.Config, port int) (*config.Config, error) {
 		cfg.AccessToken = token
 		cfg.UserID = uid
 		cfg.Demo = false
-		if err := enrichUsername(cfg); err != nil {
-			// non-fatal
-			_ = err
-		}
+		_ = enrichUsername(cfg)
 		if err := cfg.Save(); err != nil {
 			return nil, err
 		}
@@ -191,7 +255,6 @@ func enrichUsername(cfg *config.Config) error {
 	return nil
 }
 
-// SetToken saves a manually provided token + user id.
 func SetToken(cfg *config.Config, token, userID string) error {
 	cfg.AccessToken = strings.TrimSpace(token)
 	cfg.UserID = strings.TrimSpace(userID)

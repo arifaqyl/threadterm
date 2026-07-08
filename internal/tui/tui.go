@@ -74,9 +74,13 @@ type Model struct {
 	replyTo string
 
 	// login form
-	loginStep  int // 0=menu, 1=token, 2=userid, 3=oauth running
-	tokenInput textinput.Model
-	uidInput   textinput.Model
+	// 0=menu 1=cookies 2=user 3=pass 4=official-token 5=official-uid 6=oauth
+	loginStep  int
+	cookieInput textinput.Model
+	userInput   textinput.Model
+	passInput   textinput.Model
+	tokenInput  textinput.Model
+	uidInput    textinput.Model
 
 	themeCursor int
 
@@ -93,17 +97,34 @@ func New(cfg *config.Config, client api.Client) Model {
 	ta.SetWidth(56)
 	ta.ShowLineNumbers = false
 
+	ci := textinput.New()
+	ci.Placeholder = "sessionid=…; csrftoken=…; ds_user_id=…; mid=…; ig_did=…"
+	ci.CharLimit = 4096
+	ci.Width = 56
+
+	ui := textinput.New()
+	ui.Placeholder = "username (no @)"
+	ui.CharLimit = 64
+	ui.Width = 40
+
+	pi := textinput.New()
+	pi.Placeholder = "password"
+	pi.CharLimit = 128
+	pi.Width = 40
+	pi.EchoMode = textinput.EchoPassword
+	pi.EchoCharacter = '•'
+
 	ti := textinput.New()
-	ti.Placeholder = "paste access token"
+	ti.Placeholder = "official Graph access token (optional)"
 	ti.CharLimit = 512
 	ti.Width = 48
 	ti.EchoMode = textinput.EchoPassword
 	ti.EchoCharacter = '•'
 
-	ui := textinput.New()
-	ui.Placeholder = "Threads user id"
-	ui.CharLimit = 64
-	ui.Width = 48
+	oid := textinput.New()
+	oid.Placeholder = "official user id"
+	oid.CharLimit = 64
+	oid.Width = 48
 
 	start := viewFeed
 	if !cfg.SeenWelcome {
@@ -111,16 +132,19 @@ func New(cfg *config.Config, client api.Client) Model {
 	}
 
 	return Model{
-		cfg:        cfg,
-		client:     client,
-		theme:      th,
-		styles:     makeStyles(th),
-		view:       start,
-		compose:    ta,
-		tokenInput: ti,
-		uidInput:   ui,
-		status:     "ready",
-		vp:         viewport.New(80, 20),
+		cfg:         cfg,
+		client:      client,
+		theme:       th,
+		styles:      makeStyles(th),
+		view:        start,
+		compose:     ta,
+		cookieInput: ci,
+		userInput:   ui,
+		passInput:   pi,
+		tokenInput:  ti,
+		uidInput:    oid,
+		status:      "ready",
+		vp:          viewport.New(80, 20),
 	}
 }
 
@@ -194,6 +218,24 @@ func runOAuth(cfg *config.Config) tea.Cmd {
 func saveToken(cfg *config.Config, token, uid string) tea.Cmd {
 	return func() tea.Msg {
 		if err := auth.SetToken(cfg, token, uid); err != nil {
+			return loginDoneMsg{err: err}
+		}
+		return loginDoneMsg{cfg: cfg}
+	}
+}
+
+func saveCookies(cfg *config.Config, raw string) tea.Cmd {
+	return func() tea.Msg {
+		if err := auth.SetSessionFromPaste(cfg, raw); err != nil {
+			return loginDoneMsg{err: err}
+		}
+		return loginDoneMsg{cfg: cfg}
+	}
+}
+
+func savePassword(cfg *config.Config, user, pass string) tea.Cmd {
+	return func() tea.Msg {
+		if err := auth.LoginPassword(cfg, user, pass); err != nil {
 			return loginDoneMsg{err: err}
 		}
 		return loginDoneMsg{cfg: cfg}
@@ -339,23 +381,28 @@ func (m Model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.loginStep {
 	case 0: // menu
 		switch msg.String() {
-		case "1", "t":
+		case "1", "c":
 			m.loginStep = 1
+			m.cookieInput.SetValue("")
+			m.cookieInput.Focus()
+			m.err = ""
+			return m, textinput.Blink
+		case "2", "w":
+			m.loginStep = 2
+			m.userInput.SetValue(m.cfg.Username)
+			m.userInput.Focus()
+			m.err = ""
+			return m, textinput.Blink
+		case "3", "o":
+			m.loginStep = 4
 			m.tokenInput.SetValue("")
 			m.tokenInput.Focus()
-			return m, textinput.Blink
-		case "2", "o":
-			if m.cfg.ClientID == "" || m.cfg.ClientSecret == "" {
-				m.err = "set THREADTERM_CLIENT_ID + THREADTERM_CLIENT_SECRET first (see docs/AUTH.md)"
-				return m, nil
-			}
-			m.loginStep = 3
-			m.status = "waiting for browser OAuth…"
 			m.err = ""
-			return m, runOAuth(m.cfg)
-		case "3", "d":
+			return m, textinput.Blink
+		case "4", "d":
 			m.cfg.Demo = true
-			m.cfg.AccessToken = ""
+			_ = auth.ClearSession(m.cfg)
+			m.cfg.Demo = true
 			_ = m.cfg.Save()
 			m.client = api.New(m.cfg)
 			m.view = viewFeed
@@ -366,14 +413,70 @@ func (m Model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 			return m, nil
 		}
-	case 1: // token
+	case 1: // cookies
+		switch msg.String() {
+		case "esc":
+			m.loginStep = 0
+			m.cookieInput.Blur()
+			return m, nil
+		case "enter":
+			raw := strings.TrimSpace(m.cookieInput.Value())
+			if raw == "" {
+				m.err = "paste cookies from threads.com DevTools"
+				return m, nil
+			}
+			m.cookieInput.Blur()
+			m.status = "saving session…"
+			return m, saveCookies(m.cfg, raw)
+		}
+		var cmd tea.Cmd
+		m.cookieInput, cmd = m.cookieInput.Update(msg)
+		return m, cmd
+	case 2: // username for write
+		switch msg.String() {
+		case "esc":
+			m.loginStep = 0
+			m.userInput.Blur()
+			return m, nil
+		case "enter":
+			m.loginStep = 3
+			m.userInput.Blur()
+			m.passInput.SetValue("")
+			m.passInput.Focus()
+			return m, textinput.Blink
+		}
+		var cmd tea.Cmd
+		m.userInput, cmd = m.userInput.Update(msg)
+		return m, cmd
+	case 3: // password
+		switch msg.String() {
+		case "esc":
+			m.loginStep = 2
+			m.passInput.Blur()
+			m.userInput.Focus()
+			return m, textinput.Blink
+		case "enter":
+			u := strings.TrimSpace(m.userInput.Value())
+			p := m.passInput.Value()
+			if u == "" || p == "" {
+				m.err = "username and password required"
+				return m, nil
+			}
+			m.passInput.Blur()
+			m.status = "bloks login…"
+			return m, savePassword(m.cfg, u, p)
+		}
+		var cmd tea.Cmd
+		m.passInput, cmd = m.passInput.Update(msg)
+		return m, cmd
+	case 4: // official token
 		switch msg.String() {
 		case "esc":
 			m.loginStep = 0
 			m.tokenInput.Blur()
 			return m, nil
 		case "enter":
-			m.loginStep = 2
+			m.loginStep = 5
 			m.tokenInput.Blur()
 			m.uidInput.SetValue(m.cfg.UserID)
 			m.uidInput.Focus()
@@ -382,10 +485,10 @@ func (m Model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.tokenInput, cmd = m.tokenInput.Update(msg)
 		return m, cmd
-	case 2: // user id
+	case 5: // official uid
 		switch msg.String() {
 		case "esc":
-			m.loginStep = 1
+			m.loginStep = 4
 			m.uidInput.Blur()
 			m.tokenInput.Focus()
 			return m, textinput.Blink
@@ -403,10 +506,10 @@ func (m Model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.uidInput, cmd = m.uidInput.Update(msg)
 		return m, cmd
-	case 3: // oauth waiting — only esc to cancel visually (server still runs until timeout)
+	case 6:
 		if msg.String() == "esc" || msg.String() == "q" {
 			m.loginStep = 0
-			m.status = "oauth cancelled (server may still finish)"
+			m.status = "oauth cancelled"
 			return m, nil
 		}
 	}
@@ -718,7 +821,7 @@ func (m Model) renderWelcome() string {
 		"  2  l       login to your Threads",
 		"  3  t       choose a theme first",
 		"",
-		s.hint.Render("Tip: everything also works as CLI — threadterm feed --json"),
+		s.hint.Render("Live mode = paste threads.com cookies. No developer account."),
 	}, "\n")
 
 	content := box.Render(body)
@@ -733,44 +836,77 @@ func (m Model) renderLogin() string {
 		body = strings.Join([]string{
 			s.section.Render(" LOGIN "),
 			"",
-			"Connect your Threads account, or stay in demo.",
+			"No Meta developer app needed.",
+			"Same idea as Twitter/X CLIs: use your browser session.",
 			"",
-			s.accent.Render("1 / t") + "  Paste access token + user id",
-			s.accent.Render("2 / o") + "  OAuth in browser (needs Meta app)",
-			s.accent.Render("3 / d") + "  Stay in demo mode",
+			s.accent.Render("1 / c") + "  Paste cookies from threads.com  ← recommended",
+			s.accent.Render("2 / w") + "  Write login (username + password)",
+			s.accent.Render("3 / o") + "  Official Graph token (optional)",
+			s.accent.Render("4 / d") + "  Stay in demo mode",
 			"",
-			s.muted.Render("OAuth needs THREADTERM_CLIENT_ID + CLIENT_SECRET"),
-			s.muted.Render("Full guide: docs/AUTH.md  ·  esc back"),
+			s.muted.Render("Cookies = read feeds/profiles"),
+			s.muted.Render("Write login = post / like / reply"),
+			s.muted.Render("docs/AUTH.md  ·  esc back"),
 		}, "\n")
 	case 1:
 		body = strings.Join([]string{
-			s.section.Render(" TOKEN "),
+			s.section.Render(" COOKIES "),
 			"",
-			"Paste your Threads Graph API access token:",
+			"1. Open https://www.threads.com (logged in)",
+			"2. DevTools → Application → Cookies",
+			"3. Paste sessionid + csrftoken + ds_user_id (+ mid, ig_did)",
+			"",
+			m.cookieInput.View(),
+			"",
+			s.muted.Render("enter save · esc back"),
+		}, "\n")
+	case 2:
+		body = strings.Join([]string{
+			s.section.Render(" WRITE LOGIN "),
+			"",
+			"Username (Instagram / Threads):",
+			"",
+			m.userInput.View(),
+			"",
+			s.muted.Render("enter next · esc back"),
+		}, "\n")
+	case 3:
+		body = strings.Join([]string{
+			s.section.Render(" PASSWORD "),
+			"",
+			"Password (sent to Instagram Bloks login — not Meta Graph):",
+			"",
+			m.passInput.View(),
+			"",
+			s.muted.Render("enter login · esc back"),
+			s.hint.Render("May hit checkpoint 2FA — use cookies-only if so."),
+		}, "\n")
+	case 4:
+		body = strings.Join([]string{
+			s.section.Render(" OFFICIAL TOKEN "),
+			"",
+			"Optional Graph API access token:",
 			"",
 			m.tokenInput.View(),
 			"",
 			s.muted.Render("enter next · esc back"),
 		}, "\n")
-	case 2:
+	case 5:
 		body = strings.Join([]string{
 			s.section.Render(" USER ID "),
 			"",
-			"Threads user id (numeric):",
+			"Official Threads user id:",
 			"",
 			m.uidInput.View(),
 			"",
 			s.muted.Render("enter save · esc back"),
 		}, "\n")
-	case 3:
+	case 6:
 		body = strings.Join([]string{
 			s.section.Render(" OAUTH "),
 			"",
-			"Browser should open for Meta authorization.",
 			"Waiting on http://127.0.0.1:8765/callback …",
-			"",
-			s.muted.Render("Approve in the browser, then come back here."),
-			s.hint.Render("If nothing opens, check the URL printed in the terminal."),
+			s.muted.Render("Prefer cookie login unless you have a Meta app."),
 		}, "\n")
 	}
 	return s.compose.Render(body)

@@ -24,3 +24,5 @@ config.yml
 /vendor/
 *.test
 coverage.out
+
+_ref/

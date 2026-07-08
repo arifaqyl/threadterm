@@ -1,53 +1,57 @@
 # threadterm
 
-**Threads in your terminal.**
+**Threads in your terminal.** Cookie login. No Meta developer app.
 
-A hybrid TUI + CLI for [Meta Threads](https://www.threads.net) — feed, thread view, compose, themes, in-app login, and `--json` for agents. Built with Go, Bubble Tea, and Lip Gloss.
+Hybrid TUI + CLI — same idea as Twitter/X CLIs (`bird`, etc.): use your browser session, not OAuth theater. Built with Go + Bubble Tea.
 
 ```bash
-D:\threadterm\threadterm.exe --demo   # Windows
-threadterm --demo                     # after install
+threadterm --demo                 # zero setup
+threadterm login --cookies "…"    # live (from threads.com DevTools)
+threadterm feed --json            # agents
 ```
 
-> **Not affiliated with Meta.** Demo mode works offline. Live mode uses the official Threads Graph API.
+> **Not affiliated with Meta.** Demo works offline. Live mode uses your session cookies (optional Bloks password for posting). Official Graph API is optional.
 
 ---
 
-## Is this already done by someone else?
+## Why this isn’t lame
 
-Short answer: **the niche is still open.**
+| Project | Stars | Gap |
+|---------|-------|-----|
+| [ndl](https://github.com/pgray/ndl) | ~9 | thin multi-network TUI |
+| [yarn-threads-cli](https://github.com/jeizzon/yarn-threads-cli) | ~25 | CLI only, no polished TUI |
+| Official Graph API apps | — | need Meta developer approval |
 
-| Project | What it is | Stars (approx) |
-|---------|------------|----------------|
-| [ndl](https://github.com/pgray/ndl) | Threads + Bluesky TUI | ~9 |
-| [yarn-threads-cli](https://github.com/jeizzon/yarn-threads-cli) | Cookie CLI for agents | ~25 |
-| assorted CLIs | thin / early | ~0–25 |
-| [tut](https://github.com/RasmusLindroth/tut) | Mastodon TUI (inspiration) | ~500 |
-
-Nobody has shipped the “tut for Threads” yet — polished single-binary TUI **plus** agent CLI, with honest official-API auth and a zero-setup demo. That’s the bet.
+**threadterm** = tut-style TUI + agent CLI + cookie auth + themes + in-app login.
 
 ---
 
 ## How to use (TUI)
-
-First launch shows a **welcome screen** with the basics. Then:
 
 | Key | Action |
 |-----|--------|
 | `j` / `k` | move |
 | `enter` | open thread |
 | `c` | compose |
-| `R` | reply |
-| `L` | like |
-| `p` | profile |
-| `a` | **login** (token / OAuth / demo) |
-| `t` | **theme picker** |
-| `T` | cycle theme |
-| `r` | refresh |
+| `R` / `L` | reply / like |
+| `a` | **login** (cookies / write / demo) |
+| `t` / `T` | theme picker / cycle |
 | `?` | help |
-| `q` | quit / back |
+| `q` | quit |
 
-Sidebar (wide terminals): nav + status + selected post.
+### Login (no Meta app)
+
+1. Open https://www.threads.com (logged in)  
+2. DevTools → Application → Cookies  
+3. Press **`a`** in TUI → paste `sessionid; csrftoken; ds_user_id; mid; ig_did`  
+
+For posting: **`a`** → write login (username + password), or:
+
+```bash
+threadterm login --user YOU --password '…'
+```
+
+Full guide: [docs/AUTH.md](docs/AUTH.md)
 
 ### Themes
 
@@ -55,18 +59,7 @@ Sidebar (wide terminals): nav + status + selected post.
 
 ```bash
 threadterm theme ocean
-# or press t inside the TUI
 ```
-
-### Login (inside the TUI)
-
-Press **`a`**:
-
-1. **Paste token** — Graph API access token + user id  
-2. **OAuth** — browser callback (needs Meta app credentials)  
-3. **Demo** — stay offline  
-
-Full auth guide: [docs/AUTH.md](docs/AUTH.md)
 
 ---
 
@@ -76,12 +69,12 @@ Full auth guide: [docs/AUTH.md](docs/AUTH.md)
 go install github.com/arifaqyl/threadterm/cmd/threadterm@latest
 ```
 
-Or from this repo:
+Windows (this repo):
 
-```bash
+```powershell
 cd D:\threadterm
 go build -o threadterm.exe ./cmd/threadterm
-.\threadterm.exe --demo
+D:\threadterm\threadterm.exe --demo
 ```
 
 ---
@@ -89,51 +82,37 @@ go build -o threadterm.exe ./cmd/threadterm
 ## CLI
 
 ```bash
-threadterm                  # TUI
+threadterm login --cookies "sessionid=…; csrftoken=…; ds_user_id=…"
 threadterm feed --json
-threadterm post "ship it"
+threadterm post "hello"
 threadterm search golang
-threadterm profile arifaqyl
-threadterm like <id>
-threadterm login            # or press a in TUI
-threadterm theme ocean
+threadterm profile zuck
 threadterm whoami
 threadterm doctor
+threadterm theme orchid
 ```
 
-Env vars: `THREADTERM_ACCESS_TOKEN`, `THREADTERM_USER_ID`, `THREADTERM_CLIENT_ID`, `THREADTERM_CLIENT_SECRET`, `THREADTERM_THEME`, `THREADTERM_DEMO=1`
-
-Config file: `~/.threadterm/config.json`
+Env: `THREADS_SESSIONID`, `THREADS_CSRFTOKEN`, `THREADS_DS_USER_ID`, `THREADS_MID`, `THREADS_IG_DID`, `THREADTERM_THEME`, `THREADTERM_DEMO=1`
 
 ---
 
 ## Architecture
 
 ```
-cmd/threadterm       entrypoint
-internal/cli         cobra (feed, post, login, theme, …)
-internal/tui         Bubble Tea (welcome, feed, login, themes)
-internal/api         demo adapter + Graph API
-internal/auth        OAuth localhost + token save
-internal/config      theme, welcome flag, credentials
-internal/demo        offline dataset
+demo          → offline synthetic feed
+session       → browser cookies (primary live)
+session+write → cookies + Bloks bearer (post/like)
+token         → official Graph API (optional)
 ```
 
----
-
-## Roadmap
-
-- [x] Demo TUI + CLI + `--json`
-- [x] Welcome / how-to onboarding
-- [x] Themes + in-TUI login
-- [x] Official Graph API + OAuth
-- [ ] VHS `assets/demo.gif`
-- [ ] Homebrew / scoop
-- [ ] Notifications pane
-- [ ] Image URL attach
+Powered under the hood by [threads-go](https://github.com/teslashibe/threads-go) for the private session surface.
 
 ---
+
+## Disclaimer
+
+Respect Meta’s terms. Cookie/private APIs can break. Don’t abuse rate limits. Use your own account.
 
 ## License
 
-MIT © Arif Aqyl ([@mindofaqyl](https://www.threads.net/@mindofaqyl))
+MIT © Arif Aqyl

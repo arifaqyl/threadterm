@@ -244,16 +244,80 @@ func cmdLike() *cobra.Command {
 }
 
 func cmdLogin() *cobra.Command {
-	var token, userID string
-	var port int
+	var (
+		token, userID string
+		port          int
+		cookies       string
+		sessionID     string
+		csrf          string
+		dsUser        string
+		mid, igDid    string
+		user, pass    string
+	)
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Authenticate with Meta Threads (OAuth or token)",
+		Short: "Login via browser cookies (recommended) or password / official OAuth",
+		Long: `Primary path (no Meta developer app):
+
+  1. Open https://www.threads.com logged in
+  2. DevTools → Application → Cookies → copy values
+  3. threadterm login --cookies "sessionid=...; csrftoken=...; ds_user_id=...; mid=...; ig_did=..."
+
+Or paste individually:
+  threadterm login --session-id ... --csrf ... --ds-user-id ... --mid ... --ig-did ...
+
+Write access (post/like/reply) — Bloks password login:
+  threadterm login --user yourname --password '...'
+
+Official Graph API (optional):
+  threadterm login --token ... --user-id ...
+  threadterm login   # OAuth if CLIENT_ID/SECRET set`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
+
+			// Cookie paste (primary)
+			if cookies != "" {
+				if err := auth.SetSessionFromPaste(cfg, cookies); err != nil {
+					return err
+				}
+				fmt.Printf("session saved · @%s (%s) · mode=%s\n", cfg.Username, cfg.UserID, cfg.Mode())
+				fmt.Println("tip: for posting, also run: threadterm login --user YOU --password '…'")
+				return nil
+			}
+			if sessionID != "" {
+				sc := config.SessionCookies{
+					SessionID: sessionID,
+					CSRFToken: csrf,
+					DSUserID:  dsUser,
+					Mid:       mid,
+					IgDid:     igDid,
+				}
+				if err := auth.SetSession(cfg, sc); err != nil {
+					return err
+				}
+				fmt.Printf("session saved · @%s (%s) · mode=%s\n", cfg.Username, cfg.UserID, cfg.Mode())
+				return nil
+			}
+
+			// Password → bearer writes
+			if user != "" {
+				if pass == "" {
+					return fmt.Errorf("--password required with --user")
+				}
+				if err := auth.LoginPassword(cfg, user, pass); err != nil {
+					return err
+				}
+				fmt.Printf("write auth saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
+				if !cfg.HasSession() {
+					fmt.Println("note: add browser cookies for reading feeds (login --cookies …)")
+				}
+				return nil
+			}
+
+			// Official token
 			if token != "" {
 				if userID == "" {
 					return fmt.Errorf("--user-id required with --token")
@@ -261,19 +325,29 @@ func cmdLogin() *cobra.Command {
 				if err := auth.SetToken(cfg, token, userID); err != nil {
 					return err
 				}
-				fmt.Println("saved token for user", cfg.UserID, cfg.Username)
+				fmt.Println("official token saved for", cfg.UserID, cfg.Username)
 				return nil
 			}
+
+			// Official OAuth fallback
 			cfg, err = auth.LoginLocalhost(cfg, port)
 			if err != nil {
-				return err
+				return fmt.Errorf("%w\n\nprefer: threadterm login --cookies \"sessionid=…; csrftoken=…; ds_user_id=…\"", err)
 			}
 			fmt.Printf("logged in as @%s (%s)\n", cfg.Username, cfg.UserID)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&token, "token", "", "access token (skip OAuth)")
-	cmd.Flags().StringVar(&userID, "user-id", "", "Threads user id")
+	cmd.Flags().StringVar(&cookies, "cookies", "", "raw Cookie header paste from threads.com DevTools")
+	cmd.Flags().StringVar(&sessionID, "session-id", "", "sessionid cookie")
+	cmd.Flags().StringVar(&csrf, "csrf", "", "csrftoken cookie")
+	cmd.Flags().StringVar(&dsUser, "ds-user-id", "", "ds_user_id cookie")
+	cmd.Flags().StringVar(&mid, "mid", "", "mid cookie")
+	cmd.Flags().StringVar(&igDid, "ig-did", "", "ig_did cookie")
+	cmd.Flags().StringVar(&user, "user", "", "Threads/IG username for write login")
+	cmd.Flags().StringVar(&pass, "password", "", "password for write login (Bloks)")
+	cmd.Flags().StringVar(&token, "token", "", "official Graph access token (optional)")
+	cmd.Flags().StringVar(&userID, "user-id", "", "official Graph user id")
 	cmd.Flags().IntVar(&port, "port", 8765, "localhost OAuth callback port")
 	return cmd
 }
@@ -283,7 +357,13 @@ func cmdLogout() *cobra.Command {
 		Use:   "logout",
 		Short: "Clear saved credentials (back to demo)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := &config.Config{Demo: true}
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			theme := cfg.Theme
+			seen := cfg.SeenWelcome
+			cfg = &config.Config{Demo: true, Theme: theme, SeenWelcome: seen}
 			if err := cfg.Save(); err != nil {
 				return err
 			}
@@ -363,6 +443,8 @@ func cmdDoctor() *cobra.Command {
 			fmt.Println("  config:", path)
 			fmt.Println("  mode:  ", cfg.Mode())
 			fmt.Println("  theme: ", cfg.Theme)
+			fmt.Println("  session:", boolStr(cfg.HasSession()))
+			fmt.Println("  bearer: ", boolStr(cfg.HasBearer()))
 			fmt.Println("  token: ", mask(cfg.AccessToken))
 			fmt.Println("  user:  ", cfg.UserID, cfg.Username)
 			fmt.Println("  app id:", mask(cfg.ClientID))
@@ -413,4 +495,11 @@ func mask(s string) string {
 		return "***"
 	}
 	return s[:4] + "…" + s[len(s)-4:]
+}
+
+func boolStr(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }

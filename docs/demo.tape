@@ -4,46 +4,62 @@
 
 Output assets/demo.gif
 
-Set FontSize 16
-Set Width 1200
-Set Height 700
-Set Padding 16
+Set FontSize 15
+Set Width 1280
+Set Height 720
+Set Padding 20
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 40ms
+Set TypingSpeed 35ms
 
 Hide
 Type "clear"
 Enter
-Type "./threadterm --demo feed -n 5"
-Enter
-Sleep 1s
 Show
 
-Sleep 2s
+Type "# threadterm — Threads in your terminal (no Meta app)"
+Enter
+Sleep 800ms
+
 Type "./threadterm --demo whoami"
 Enter
 Sleep 1s
+
+Type "./threadterm --demo feed -n 4"
+Enter
+Sleep 2s
 
 Type "./threadterm --demo post \"hello from threadterm\" --json"
 Enter
 Sleep 1.5s
 
-Type "# open the TUI — press ? for help, q to quit"
+Type "./threadterm theme ocean"
 Enter
 Sleep 1s
+
+Type "# press a inside TUI to paste threads.com cookies"
+Enter
+Sleep 1s
+
 Type "./threadterm --demo"
 Enter
-Sleep 4s
+Sleep 3s
+Type "1"
+Sleep 2s
+Type "j"
+Sleep 400ms
+Type "j"
+Sleep 400ms
 Type "?"
 Sleep 2s
 Type "q"
-Type "j"
-Sleep 500ms
-Type "j"
-Sleep 500ms
-Type "enter"
+Sleep 400ms
+Type "t"
+Sleep 1.5s
+Type "q"
+Sleep 400ms
+Type "a"
 Sleep 2s
 Type "q"
-Sleep 500ms
+Sleep 400ms
 Type "q"
 Sleep 1s
