@@ -1,17 +1,15 @@
 # threadterm
 
-**Threads in your terminal.** Just `threadterm login` — username + password.
-
-Hybrid TUI + CLI. No Meta developer app. Built with Go + Bubble Tea.
+**Threads in your terminal.** Login like bird — auto from Chrome.
 
 ```bash
-threadterm login          # username + password (normal)
+threadterm login          # reads Threads session from your browser
 threadterm                # TUI
 threadterm feed --json    # agents
 threadterm --demo         # try offline first
 ```
 
-> **Not affiliated with Meta.** Demo works offline. Live mode uses your session cookies (optional Bloks password for posting). Official Graph API is optional.
+> **Not affiliated with Meta.** Be logged into threads.com in Chrome/Firefox first. Official Graph API is optional.
 
 ---
 
@@ -43,14 +41,14 @@ threadterm --demo         # try offline first
 ### Login
 
 ```bash
+# 1. Log into https://www.threads.com in Chrome
+# 2. Then:
 threadterm login
-# username:
-# password:
 ```
 
-Or in TUI press **`a`** → username + password.
+Same UX as [bird](https://github.com/steipete/bird) for Twitter — auto cookie extract, no DevTools.
 
-Optional cookies / official Graph API: [docs/AUTH.md](docs/AUTH.md)
+Details: [docs/AUTH.md](docs/AUTH.md)
 
 ### Themes
 

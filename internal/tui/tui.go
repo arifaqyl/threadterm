@@ -381,22 +381,25 @@ func (m Model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.loginStep {
 	case 0: // menu
 		switch msg.String() {
-		case "1", "w":
+		case "1", "b":
+			m.status = "reading browser cookies…"
+			m.err = ""
+			return m, func() tea.Msg {
+				if err := auth.LoginFromBrowser(m.cfg); err != nil {
+					return loginDoneMsg{err: err}
+				}
+				return loginDoneMsg{cfg: m.cfg}
+			}
+		case "2", "w":
 			m.loginStep = 2
 			m.userInput.SetValue(m.cfg.Username)
 			m.userInput.Focus()
 			m.err = ""
 			return m, textinput.Blink
-		case "2", "c":
+		case "3", "c":
 			m.loginStep = 1
 			m.cookieInput.SetValue("")
 			m.cookieInput.Focus()
-			m.err = ""
-			return m, textinput.Blink
-		case "3", "o":
-			m.loginStep = 4
-			m.tokenInput.SetValue("")
-			m.tokenInput.Focus()
 			m.err = ""
 			return m, textinput.Blink
 		case "4", "d":
@@ -836,15 +839,15 @@ func (m Model) renderLogin() string {
 		body = strings.Join([]string{
 			s.section.Render(" LOGIN "),
 			"",
-			"Normal login — username + password.",
-			"No Meta developer app. No cookie hunting.",
+			"Same as bird (Twitter CLI): use your browser session.",
+			"Be logged into threads.com in Chrome/Firefox first.",
 			"",
-			s.accent.Render("1 / w") + "  Username + password  ← do this",
-			s.accent.Render("2 / c") + "  Paste cookies (optional extra)",
-			s.accent.Render("3 / o") + "  Official Graph token (optional)",
+			s.accent.Render("1 / b") + "  Auto from browser  ← easiest",
+			s.accent.Render("2 / w") + "  Username + password",
+			s.accent.Render("3 / c") + "  Paste cookies manually",
 			s.accent.Render("4 / d") + "  Stay in demo mode",
 			"",
-			s.muted.Render("Password login → home feed + post + like + reply"),
+			s.muted.Render("Or just run:  threadterm login"),
 			s.muted.Render("docs/AUTH.md  ·  esc back"),
 		}, "\n")
 	case 1:

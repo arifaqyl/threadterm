@@ -25,13 +25,13 @@ var (
 func Execute() error {
 	root := &cobra.Command{
 		Use:   "threadterm",
-		Short: "Threads in your terminal â€” TUI + CLI",
+		Short: "Threads in your terminal Ã¢â‚¬â€ TUI + CLI",
 		Long: `threadterm is a hybrid Threads client.
 
   threadterm                 open the TUI
   threadterm feed --json     agent-friendly feed
   threadterm post "hi"       publish from the shell
-  threadterm login           OAuth via localhost callback
+  threadterm login           auto from Chrome (like bird)
 
 Default mode is demo (offline). Set a Meta Threads token for live.`,
 		SilenceUsage:  true,
@@ -101,7 +101,7 @@ func cmdFeed() *cobra.Command {
 				return printJSON(page)
 			}
 			for _, p := range page.Posts {
-				fmt.Printf("%s  @%s  â™¥%d\n  %s\n\n", p.ID, p.Username, p.LikeCount, indent(p.Text, 2))
+				fmt.Printf("%s  @%s  Ã¢â„¢Â¥%d\n  %s\n\n", p.ID, p.Username, p.LikeCount, indent(p.Text, 2))
 			}
 			return nil
 		},
@@ -154,7 +154,7 @@ func cmdThread() *cobra.Command {
 			}
 			fmt.Printf("@%s\n%s\n\n", th.Root.Username, th.Root.Text)
 			for _, r := range th.Replies {
-				fmt.Printf("  â”” @%s: %s\n", r.Username, r.Text)
+				fmt.Printf("  Ã¢â€â€ @%s: %s\n", r.Username, r.Text)
 			}
 			return nil
 		},
@@ -257,25 +257,31 @@ func cmdLogin() *cobra.Command {
 		mid, igDid    string
 		user, pass    string
 		totp          string
-		cookieMode    bool
+		manualCookies bool
+		usePassword   bool
+		noBrowser     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in (password, or --cookies if Meta blocks password)",
-		Long: `Login options:
+		Short: "Log in (auto from Chrome â€” like bird/Twitter CLI)",
+		Long: `Default (easiest â€” same as bird for Twitter):
 
-  threadterm login              # username + password
-  threadterm login --cookies    # guided browser cookies (most reliable)
+  threadterm login
 
-If password login fails with "no Bearer token" / unexpected error,
-Meta blocked the device — use --cookies (30 seconds).`,
+Reads your Threads session from Chrome/Edge/Brave/Firefox automatically.
+Just be logged into https://www.threads.com in the browser first.
+
+Other options:
+  threadterm login --password     # username + password (often blocked by Meta)
+  threadterm login --cookies      # guided manual cookie paste
+  threadterm login --user X --password Y`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
 
-			if cookieMode {
+			if manualCookies {
 				return auth.GuidedCookieLogin(cfg)
 			}
 
@@ -283,7 +289,7 @@ Meta blocked the device — use --cookies (30 seconds).`,
 				if err := auth.SetSessionFromPaste(cfg, cookieString); err != nil {
 					return err
 				}
-				fmt.Printf("cookies saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
+				fmt.Printf("cookies saved Â· @%s Â· mode=%s\n", cfg.Username, cfg.Mode())
 				return nil
 			}
 			if sessionID != "" {
@@ -297,7 +303,7 @@ Meta blocked the device — use --cookies (30 seconds).`,
 				if err := auth.SetSession(cfg, sc); err != nil {
 					return err
 				}
-				fmt.Printf("cookies saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
+				fmt.Printf("cookies saved Â· @%s Â· mode=%s\n", cfg.Username, cfg.Mode())
 				return nil
 			}
 
@@ -312,38 +318,30 @@ Meta blocked the device — use --cookies (30 seconds).`,
 				return nil
 			}
 
-			wantInteractive := user == "" && pass == "" && cookieString == "" && sessionID == "" && token == ""
-			if wantInteractive {
-				fmt.Println("threadterm login")
-				fmt.Println("Enter your Threads / Instagram username and password.")
-				fmt.Println("(If Meta blocks this, we'll switch to easy cookie login.)")
-				fmt.Println()
-				user, err = promptLine("username: ")
-				if err != nil {
-					return err
+			// Explicit password path
+			if usePassword || user != "" {
+				if user == "" {
+					user, err = promptLine("username: ")
+					if err != nil {
+						return err
+					}
 				}
-				pass, err = promptPassword("password: ")
-				if err != nil {
-					return err
-				}
-				t, _ := promptLine("2FA secret (optional, Enter to skip): ")
-				totp = strings.TrimSpace(t)
-			}
-
-			if user != "" {
 				if pass == "" {
-					var err error
 					pass, err = promptPassword("password: ")
 					if err != nil {
 						return err
 					}
 				}
-				fmt.Println("logging in…")
+				fmt.Println("logging inâ€¦")
 				if err := auth.LoginPasswordTOTP(cfg, user, pass, totp); err != nil {
 					fmt.Println()
 					fmt.Println(auth.ExplainLoginFailure(err))
 					fmt.Println()
-					fmt.Print("Switch to cookie login now? [Y/n] ")
+					fmt.Println("Falling back to browser session (bird-style)â€¦")
+					if err2 := auth.LoginFromBrowser(cfg); err2 == nil {
+						return nil
+					}
+					fmt.Print("Open guided cookie paste? [Y/n] ")
 					ans, _ := promptLine("")
 					ans = strings.ToLower(strings.TrimSpace(ans))
 					if ans == "" || ans == "y" || ans == "yes" {
@@ -351,27 +349,46 @@ Meta blocked the device — use --cookies (30 seconds).`,
 					}
 					return auth.ExplainLoginFailure(err)
 				}
-				fmt.Printf("logged in as @%s · mode=%s\n", cfg.Username, cfg.Mode())
-				fmt.Println("try:  threadterm          # TUI")
-				fmt.Println("      threadterm feed")
-				fmt.Println("      threadterm post \"hello\"")
+				fmt.Printf("logged in as @%s Â· mode=%s\n", cfg.Username, cfg.Mode())
 				return nil
 			}
 
-			return fmt.Errorf("nothing to do — run: threadterm login   or   threadterm login --cookies")
+			// DEFAULT: auto browser cookies (bird UX)
+			if !noBrowser {
+				if err := auth.LoginFromBrowser(cfg); err == nil {
+					fmt.Println("try:  threadterm")
+					fmt.Println("      threadterm feed")
+					return nil
+				} else {
+					fmt.Println("browser auto-login:", err)
+					fmt.Println()
+					fmt.Println("Make sure you're logged into https://www.threads.com in Chrome, then retry.")
+					fmt.Print("Open guided cookie paste instead? [Y/n] ")
+					ans, _ := promptLine("")
+					ans = strings.ToLower(strings.TrimSpace(ans))
+					if ans == "" || ans == "y" || ans == "yes" {
+						return auth.GuidedCookieLogin(cfg)
+					}
+					return err
+				}
+			}
+
+			return fmt.Errorf("nothing to do â€” run: threadterm login")
 		},
 	}
-	cmd.Flags().BoolVar(&cookieMode, "cookies", false, "guided browser-cookie login (most reliable)")
-	cmd.Flags().StringVar(&cookieString, "cookie-string", "", "optional: raw Cookie header from threads.com")
-	cmd.Flags().StringVar(&sessionID, "session-id", "", "optional sessionid cookie")
-	cmd.Flags().StringVar(&csrf, "csrf", "", "optional csrftoken cookie")
-	cmd.Flags().StringVar(&dsUser, "ds-user-id", "", "optional ds_user_id cookie")
-	cmd.Flags().StringVar(&mid, "mid", "", "optional mid cookie")
-	cmd.Flags().StringVar(&igDid, "ig-did", "", "optional ig_did cookie")
-	cmd.Flags().StringVar(&user, "user", "", "Threads/IG username")
-	cmd.Flags().StringVar(&pass, "password", "", "password (omit to get a hidden prompt)")
-	cmd.Flags().StringVar(&totp, "totp", "", "authenticator 2FA secret (optional)")
-	cmd.Flags().StringVar(&token, "token", "", "official Graph access token (optional)")
+	cmd.Flags().BoolVar(&manualCookies, "cookies", false, "guided manual cookie paste")
+	cmd.Flags().BoolVar(&usePassword, "password-login", false, "use username+password instead of browser")
+	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "skip auto browser cookie extraction")
+	cmd.Flags().StringVar(&cookieString, "cookie-string", "", "raw Cookie header from threads.com")
+	cmd.Flags().StringVar(&sessionID, "session-id", "", "sessionid cookie")
+	cmd.Flags().StringVar(&csrf, "csrf", "", "csrftoken cookie")
+	cmd.Flags().StringVar(&dsUser, "ds-user-id", "", "ds_user_id cookie")
+	cmd.Flags().StringVar(&mid, "mid", "", "mid cookie")
+	cmd.Flags().StringVar(&igDid, "ig-did", "", "ig_did cookie")
+	cmd.Flags().StringVar(&user, "user", "", "Threads/IG username (password login)")
+	cmd.Flags().StringVar(&pass, "password", "", "password")
+	cmd.Flags().StringVar(&totp, "totp", "", "authenticator 2FA secret")
+	cmd.Flags().StringVar(&token, "token", "", "official Graph access token")
 	cmd.Flags().StringVar(&userID, "user-id", "", "official Graph user id")
 	cmd.Flags().IntVar(&port, "port", 8765, "localhost OAuth callback port")
 	_ = port
@@ -392,7 +409,7 @@ func cmdLogout() *cobra.Command {
 			if err := cfg.Save(); err != nil {
 				return err
 			}
-			fmt.Println("logged out Â· demo mode")
+			fmt.Println("logged out Ã‚Â· demo mode")
 			return nil
 		},
 	}
@@ -433,7 +450,7 @@ func cmdTheme() *cobra.Command {
 					return printJSON(map[string]any{"theme": cfg.Theme, "available": []string{"jade", "ocean", "ember", "mono", "orchid"}})
 				}
 				fmt.Println("current:", cfg.Theme)
-				fmt.Println("available: jade Â· ocean Â· ember Â· mono Â· orchid")
+				fmt.Println("available: jade Ã‚Â· ocean Ã‚Â· ember Ã‚Â· mono Ã‚Â· orchid")
 				fmt.Println("tip: press t inside the TUI, or T to cycle")
 				return nil
 			}
@@ -519,7 +536,7 @@ func mask(s string) string {
 	if len(s) < 8 {
 		return "***"
 	}
-	return s[:4] + "â€¦" + s[len(s)-4:]
+	return s[:4] + "Ã¢â‚¬Â¦" + s[len(s)-4:]
 }
 
 func boolStr(v bool) string {

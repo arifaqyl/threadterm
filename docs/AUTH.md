@@ -1,63 +1,45 @@
 # Auth
 
-## Reality check (Jul 2026)
-
-Meta often **blocks password login from new devices/CLIs** with:
-
-> Unable to log in / An unexpected error occurred
-
-That is **not** “wrong password”. It’s a risk/checkpoint response with no token.
-
-So threadterm supports two paths:
-
-| Path | Command | Reliability |
-|------|---------|-------------|
-| **Cookies (recommended when password fails)** | `threadterm login --cookies` | high |
-| Password | `threadterm login` | works until Meta blocks the device |
-| Official Graph | `--token` | needs Meta developer app |
-
----
-
-## Easy login (do this now)
-
-```powershell
-D:\threadterm\threadterm.exe login --cookies
-```
-
-It opens Threads and asks you to paste:
-
-1. Open https://www.threads.com (already logged in)
-2. Press **F12** → **Application** → **Cookies** → `www.threads.com`
-3. Copy **sessionid**, **csrftoken**, **ds_user_id** (mid + ig_did nice to have)
-4. Paste when prompted
-
-Then:
-
-```powershell
-D:\threadterm\threadterm.exe
-D:\threadterm\threadterm.exe feed
-```
-
----
-
-## Password login
+## Default — like bird (Twitter CLI)
 
 ```powershell
 D:\threadterm\threadterm.exe login
 ```
 
-If it fails, it offers to switch to cookie login automatically.
+That’s it.
 
-2FA:
+1. Be logged into https://www.threads.com in Chrome / Edge / Brave / Firefox  
+2. Run `threadterm login`  
+3. It **auto-reads** `sessionid` / `csrftoken` / `ds_user_id` from your browser  
 
-```powershell
-threadterm login --user YOU --password '…' --totp YOUR_AUTH_SECRET
-```
+No Meta developer app. No DevTools. No password paste.
+
+Powered by the same approach as [`bird`](https://github.com/steipete/bird) → [`sweetcookie`](https://github.com/steipete/sweetcookie).
+
+---
+
+## Other options
+
+| Command | When |
+|---------|------|
+| `threadterm login` | default — auto browser |
+| `threadterm login --password-login` | try username+password (Meta often blocks) |
+| `threadterm login --cookies` | guided manual paste |
+| `threadterm login --user X --password Y` | non-interactive password |
+
+In the TUI: press **`a`** → **1** auto from browser.
+
+---
+
+## Why password failed earlier
+
+Meta returned *“Unable to log in / unexpected error”* with **no token**.  
+That’s a device/risk block, not wrong password. Browser-session login sidesteps it — same reason Twitter CLIs never ask for your X password.
 
 ---
 
 ## Security
 
-- Never paste passwords into chat.
-- If you did, **change the Instagram/Threads password now**.
-- `~/.threadterm/config.json` is mode `0600` — don’t commit it.
+- Never paste passwords into chat.  
+- Cookies stay in `~/.threadterm/config.json` (mode `0600`).  
+- `threadterm logout` clears them.
