@@ -1,0 +1,26 @@
+﻿# Binaries
+/threadterm
+/threadterm.exe
+/bin/
+/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Secrets / local
+.env
+.env.*
+!.env.example
+*.token
+config.yaml
+config.yml
+.threadterm/
+
+# Go
+/vendor/
+*.test
+coverage.out
