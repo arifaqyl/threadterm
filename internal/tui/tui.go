@@ -5,13 +5,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/arifaqyl/threadterm/internal/api"
 	"github.com/arifaqyl/threadterm/internal/auth"
 	"github.com/arifaqyl/threadterm/internal/config"
 	"github.com/arifaqyl/threadterm/internal/models"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -66,16 +66,16 @@ type Model struct {
 	status string
 	err    string
 
-	posts   []models.Post
-	cursor  int
+	posts  []models.Post
+	cursor int
 	// feedOffsets[i] = starting line of post i inside the viewport content.
 	feedOffsets []int
 	feedSource  string
 	feedHint    string
-	thread  *models.Thread
-	profile *models.User
-	pPosts  []models.Post
-	loading bool
+	thread      *models.Thread
+	profile     *models.User
+	pPosts      []models.Post
+	loading     bool
 
 	compose textarea.Model
 	replyTo string
@@ -410,6 +410,8 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 			return m, nil
 		}
+		m.feedSource = "search"
+		m.feedHint = ""
 		m.status = "searching " + q + "…"
 		m.loading = true
 		m.refreshViewport()
@@ -972,8 +974,8 @@ func (m Model) renderSidebar() string {
 		m.navItem("?", "help", m.view == viewHelp),
 		"",
 		s.accent.Render("STATUS"),
-		s.muted.Render("mode  "+auth.Mode),
-		s.muted.Render("theme "+m.theme.Name),
+		s.muted.Render("mode  " + auth.Mode),
+		s.muted.Render("theme " + m.theme.Name),
 	}
 	if auth.Username != "" {
 		items = append(items, s.muted.Render("@"+auth.Username))
@@ -1156,7 +1158,7 @@ func (m Model) renderSearch() string {
 	return strings.Join([]string{
 		s.section.Render(" SEARCH "),
 		"",
-		s.muted.Render("Find users, then show their latest posts"),
+		s.muted.Render("Find posts by text query (e.g. lrt kelana jaya)"),
 		"",
 		m.searchInput.View(),
 		"",
@@ -1168,15 +1170,29 @@ func (m Model) renderSearch() string {
 func (m Model) renderFeedBody() (string, []int) {
 	s := m.styles
 	if m.loading && len(m.posts) == 0 {
-		return s.muted.Render("\n  loading your following feed…\n  (first load can take a few seconds)\n"), nil
+		switch m.feedSource {
+		case "search":
+			return s.muted.Render("\n  searching posts...\n"), nil
+		case "discover":
+			return s.muted.Render("\n  loading discover...\n"), nil
+		default:
+			return s.muted.Render("\n  loading your following feed...\n  (first load can take a few seconds)\n"), nil
+		}
 	}
 	if len(m.posts) == 0 {
 		hint := m.feedHint
 		if hint == "" {
-			hint = "no posts from people you follow"
+			switch m.feedSource {
+			case "search":
+				hint = "no posts found for that query"
+			case "discover":
+				hint = "discover is empty right now"
+			default:
+				hint = "no posts from people you follow"
+			}
 		}
 		return s.muted.Render(fmt.Sprintf(
-			"\n  %s\n\n  /  search users\n  d  public discover (not your feed)\n  r  refresh following\n",
+			"\n  %s\n\n  /  search posts\n  d  public discover (not your feed)\n  r  refresh following\n",
 			hint,
 		)), nil
 	}

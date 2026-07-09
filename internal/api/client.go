@@ -24,7 +24,10 @@ type Client interface {
 	Discover(limit int) (models.FeedPage, error)
 	Thread(id string) (models.Thread, error)
 	Profile(username string) (models.User, []models.Post, error)
+	// Search returns post-centric results.
 	Search(q string, limit int) (models.FeedPage, error)
+	// SearchUsers returns account-centric matches.
+	SearchUsers(q string, limit int) (models.FeedPage, error)
 	Latest(username string, limit int) (models.FeedPage, error)
 	Publish(text string) (models.PublishResult, error)
 	Reply(parentID, text string) (models.PublishResult, error)
@@ -80,6 +83,9 @@ func (b *brokenClient) Profile(string) (models.User, []models.Post, error) {
 func (b *brokenClient) Search(string, int) (models.FeedPage, error) {
 	return models.FeedPage{}, b.err
 }
+func (b *brokenClient) SearchUsers(string, int) (models.FeedPage, error) {
+	return models.FeedPage{}, b.err
+}
 func (b *brokenClient) Latest(string, int) (models.FeedPage, error) {
 	return models.FeedPage{}, b.err
 }
@@ -114,6 +120,9 @@ func (d *demoAdapter) Profile(u string) (models.User, []models.Post, error) {
 	return d.store.Profile(u)
 }
 func (d *demoAdapter) Search(q string, n int) (models.FeedPage, error) {
+	return d.store.Search(q, n)
+}
+func (d *demoAdapter) SearchUsers(q string, n int) (models.FeedPage, error) {
 	return d.store.Search(q, n)
 }
 func (d *demoAdapter) Latest(username string, n int) (models.FeedPage, error) {
@@ -340,6 +349,12 @@ func (g *graphClient) Search(query string, limit int) (models.FeedPage, error) {
 		posts = append(posts, m.toPost())
 	}
 	return models.FeedPage{Posts: posts}, nil
+}
+
+func (g *graphClient) SearchUsers(query string, limit int) (models.FeedPage, error) {
+	// Official Graph API does not expose user search for Threads in this client surface.
+	// Reuse post search fallback behavior.
+	return g.Search(query, limit)
 }
 
 func (g *graphClient) Latest(username string, limit int) (models.FeedPage, error) {

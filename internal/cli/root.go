@@ -1,4 +1,4 @@
-﻿package cli
+package cli
 
 import (
 	"bufio"
@@ -19,15 +19,18 @@ import (
 )
 
 var (
-	jsonOut bool
+	jsonOut   bool
 	demoForce bool
-	limit   int
+	limit     int
 )
+
+// Version is injected at build time via -ldflags.
+var Version = "dev"
 
 func Execute() error {
 	root := &cobra.Command{
 		Use:   "threadterm",
-		Short: "Threads in your terminal Ã¢â‚¬â€ TUI + CLI",
+		Short: "Threads in your terminal - TUI + CLI",
 		Long: `threadterm is a hybrid Threads client.
 
   threadterm                 open the TUI
@@ -56,6 +59,7 @@ Default mode is demo (offline). Set a Meta Threads token for live.`,
 		cmdPost(),
 		cmdThread(),
 		cmdSearch(),
+		cmdSearchUsers(),
 		cmdLatest(),
 		cmdProfile(),
 		cmdLike(),
@@ -181,7 +185,7 @@ func cmdThread() *cobra.Command {
 			}
 			fmt.Printf("@%s\n%s\n\n", th.Root.Username, th.Root.Text)
 			for _, r := range th.Replies {
-				fmt.Printf("  Ã¢â€â€ @%s: %s\n", r.Username, r.Text)
+				fmt.Printf("  -> @%s: %s\n", r.Username, r.Text)
 			}
 			return nil
 		},
@@ -191,7 +195,7 @@ func cmdThread() *cobra.Command {
 func cmdSearch() *cobra.Command {
 	return &cobra.Command{
 		Use:   "search [query]",
-		Short: "Search users and return their latest posts (agent-friendly)",
+		Short: "Search posts (best-effort, source-labeled)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, c, err := makeClient()
@@ -209,8 +213,60 @@ func cmdSearch() *cobra.Command {
 				fmt.Println("no hits")
 				return nil
 			}
+			if page.Source != "" {
+				fmt.Printf("# source=%s", page.Source)
+				if page.Hint != "" {
+					fmt.Printf(" · %s", page.Hint)
+				}
+				fmt.Println()
+			}
 			for _, p := range page.Posts {
 				fmt.Printf("@%s  %s  ♥%d\n  %s\n\n", p.Username, p.ID, p.LikeCount, indent(p.Text, 2))
+			}
+			return nil
+		},
+	}
+}
+
+func cmdSearchUsers() *cobra.Command {
+	return &cobra.Command{
+		Use:   "search-users [query]",
+		Short: "Search users/accounts by name or handle",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := makeClient()
+			if err != nil {
+				return err
+			}
+			page, err := c.SearchUsers(strings.Join(args, " "), limit)
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				return printJSON(page)
+			}
+			if len(page.Posts) == 0 {
+				if page.Hint != "" {
+					fmt.Println(page.Hint)
+				} else {
+					fmt.Println("no users found")
+				}
+				return nil
+			}
+			if page.Source != "" {
+				fmt.Printf("# source=%s", page.Source)
+				if page.Hint != "" {
+					fmt.Printf(" · %s", page.Hint)
+				}
+				fmt.Println()
+			}
+			for _, p := range page.Posts {
+				fmt.Printf("@%s  %s\n", p.Username, p.ID)
+				if p.Text != "" {
+					fmt.Printf("  %s\n\n", p.Text)
+				} else {
+					fmt.Println()
+				}
 			}
 			return nil
 		},
@@ -359,8 +415,8 @@ func cmdLogin() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in (auto from Chrome â€” like bird/Twitter CLI)",
-		Long: `Default (easiest â€” same as bird for Twitter):
+		Short: "Log in (auto from Chrome - like bird/Twitter CLI)",
+		Long: `Default (easiest - same as bird for Twitter):
 
   threadterm login
 
@@ -368,9 +424,9 @@ Reads your Threads session from Chrome/Edge/Brave/Firefox automatically.
 Just be logged into https://www.threads.com in the browser first.
 
 Other options:
-  threadterm login --password     # username + password (often blocked by Meta)
+  threadterm login --password-login --user X
   threadterm login --cookies      # guided manual cookie paste
-  threadterm login --user X --password Y`,
+  THREADTERM_PASSWORD=... threadterm login --password-login --user X`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -385,7 +441,7 @@ Other options:
 				if err := auth.SetSessionFromPaste(cfg, cookieString); err != nil {
 					return err
 				}
-				fmt.Printf("cookies saved Â· @%s Â· mode=%s\n", cfg.Username, cfg.Mode())
+				fmt.Printf("cookies saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
 				return nil
 			}
 			if sessionID != "" {
@@ -399,7 +455,7 @@ Other options:
 				if err := auth.SetSession(cfg, sc); err != nil {
 					return err
 				}
-				fmt.Printf("cookies saved Â· @%s Â· mode=%s\n", cfg.Username, cfg.Mode())
+				fmt.Printf("cookies saved · @%s · mode=%s\n", cfg.Username, cfg.Mode())
 				return nil
 			}
 
@@ -423,17 +479,20 @@ Other options:
 					}
 				}
 				if pass == "" {
+					pass = os.Getenv("THREADTERM_PASSWORD")
+				}
+				if pass == "" {
 					pass, err = promptPassword("password: ")
 					if err != nil {
 						return err
 					}
 				}
-				fmt.Println("logging inâ€¦")
+				fmt.Println("logging in...")
 				if err := auth.LoginPasswordTOTP(cfg, user, pass, totp); err != nil {
 					fmt.Println()
 					fmt.Println(auth.ExplainLoginFailure(err))
 					fmt.Println()
-					fmt.Println("Falling back to browser session (bird-style)â€¦")
+					fmt.Println("Falling back to browser session (bird-style)...")
 					if err2 := auth.LoginFromBrowser(cfg); err2 == nil {
 						return nil
 					}
@@ -445,7 +504,7 @@ Other options:
 					}
 					return auth.ExplainLoginFailure(err)
 				}
-				fmt.Printf("logged in as @%s Â· mode=%s\n", cfg.Username, cfg.Mode())
+				fmt.Printf("logged in as @%s · mode=%s\n", cfg.Username, cfg.Mode())
 				return nil
 			}
 
@@ -469,7 +528,7 @@ Other options:
 				}
 			}
 
-			return fmt.Errorf("nothing to do â€” run: threadterm login")
+			return fmt.Errorf("nothing to do - run: threadterm login")
 		},
 	}
 	cmd.Flags().BoolVar(&manualCookies, "cookies", false, "guided manual cookie paste")
@@ -482,7 +541,6 @@ Other options:
 	cmd.Flags().StringVar(&mid, "mid", "", "mid cookie")
 	cmd.Flags().StringVar(&igDid, "ig-did", "", "ig_did cookie")
 	cmd.Flags().StringVar(&user, "user", "", "Threads/IG username (password login)")
-	cmd.Flags().StringVar(&pass, "password", "", "password")
 	cmd.Flags().StringVar(&totp, "totp", "", "authenticator 2FA secret")
 	cmd.Flags().StringVar(&token, "token", "", "official Graph access token")
 	cmd.Flags().StringVar(&userID, "user-id", "", "official Graph user id")
@@ -505,7 +563,7 @@ func cmdLogout() *cobra.Command {
 			if err := cfg.Save(); err != nil {
 				return err
 			}
-			fmt.Println("logged out Ã‚Â· demo mode")
+			fmt.Println("logged out · demo mode")
 			return nil
 		},
 	}
@@ -546,7 +604,7 @@ func cmdTheme() *cobra.Command {
 					return printJSON(map[string]any{"theme": cfg.Theme, "available": []string{"jade", "ocean", "ember", "mono", "orchid"}})
 				}
 				fmt.Println("current:", cfg.Theme)
-				fmt.Println("available: jade Ã‚Â· ocean Ã‚Â· ember Ã‚Â· mono Ã‚Â· orchid")
+				fmt.Println("available: jade · ocean · ember · mono · orchid")
 				fmt.Println("tip: press t inside the TUI, or T to cycle")
 				return nil
 			}
@@ -603,11 +661,11 @@ func cmdVersion() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v := map[string]string{"name": "threadterm", "version": "0.1.0"}
+			v := map[string]string{"name": "threadterm", "version": Version}
 			if jsonOut {
 				return printJSON(v)
 			}
-			fmt.Println("threadterm 0.1.0")
+			fmt.Println("threadterm", Version)
 			return nil
 		},
 	}
@@ -632,7 +690,7 @@ func mask(s string) string {
 	if len(s) < 8 {
 		return "***"
 	}
-	return s[:4] + "Ã¢â‚¬Â¦" + s[len(s)-4:]
+	return s[:4] + "..." + s[len(s)-4:]
 }
 
 func boolStr(v bool) string {

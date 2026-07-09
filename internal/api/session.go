@@ -3,11 +3,17 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/arifaqyl/threadterm/internal/browser"
 	"github.com/arifaqyl/threadterm/internal/config"
 	"github.com/arifaqyl/threadterm/internal/models"
 	threads "github.com/teslashibe/threads-go"
@@ -21,8 +27,9 @@ type sessionClient struct {
 
 // Opt-in discovery seeds (NOT your feed). Used only by Discover / feed --discover.
 var discoverySeeds = []string{
-	"zuck", "mosseri", "meta", "instagram", "threads",
-	"golang", "openai", "anthropicai",
+	"myrapidkl", "rapidkl", "ktmb_berhad", "ktmberhad", "mrtcorp",
+	"airasia", "bernamatv", "astroawani", "thevocket", "saysdotcom",
+	"malaysiakini", "malaymail", "worldofbuzz",
 }
 
 func newSessionClient(cfg *config.Config) (*sessionClient, error) {
@@ -129,7 +136,7 @@ func (s *sessionClient) Feed(_ string, limit int) (models.FeedPage, error) {
 	return models.FeedPage{Posts: nil, Source: "empty", Hint: "no posts — try: threadterm search malaysia"}, nil
 }
 
-// Discover is an opt-in public sample feed (zuck/threads/etc). Not your timeline.
+// Discover is an opt-in public sample feed. Not your timeline.
 func (s *sessionClient) Discover(limit int) (models.FeedPage, error) {
 	ctx := context.Background()
 	if limit <= 0 {
@@ -298,62 +305,303 @@ func (s *sessionClient) Search(q string, limit int) (models.FeedPage, error) {
 		return models.FeedPage{}, fmt.Errorf("search needs browser session — run: threadterm login")
 	}
 
-	users, err := s.tc.SearchUsers(ctx, q, 12)
-	if err != nil {
-		return models.FeedPage{}, err
+	// Primary: render threads.com/search (same lane as TrafficMY collector).
+	posts, browserErr := browser.SearchPosts(ctx, s.cfg, q, limit)
+	if browserErr == nil {
+		sort.Slice(posts, func(i, j int) bool { return posts[i].Timestamp.After(posts[j].Timestamp) })
+		posts = dedupePosts(posts)
+		if len(posts) > limit {
+			posts = posts[:limit]
+		}
+		if len(posts) == 0 {
+			return models.FeedPage{
+				Source: "search-browser",
+				Hint:   fmt.Sprintf("no results for %q", q),
+			}, nil
+		}
+		return models.FeedPage{
+			Posts:  posts,
+			Source: "search-browser",
+			Hint:   fmt.Sprintf("matches for %q", q),
+		}, nil
 	}
-	if len(users.Users) == 0 {
-		return models.FeedPage{}, nil
+	if !browserSearchOptional(browserErr) {
+		return models.FeedPage{}, browserErr
+	}
+
+	// Fallback: static HTML (usually empty — search is client-rendered).
+	if page, err := s.searchWeb(ctx, q, limit); err == nil && len(page.Posts) > 0 {
+		return page, nil
+	}
+
+	// Best path: native post search when available.
+	if page, err := s.tc.SearchPosts(ctx, q, max(limit*2, 30), ""); err == nil && len(page.Threads) > 0 {
+		posts := flattenThreads(page.Threads)
+		posts = filterPostsByQuery(posts, q)
+		sort.Slice(posts, func(i, j int) bool { return posts[i].Timestamp.After(posts[j].Timestamp) })
+		posts = dedupePosts(posts)
+		if len(posts) > limit {
+			posts = posts[:limit]
+		}
+		if len(posts) > 0 {
+			return models.FeedPage{
+				Posts:  posts,
+				Source: "search",
+				Hint:   fmt.Sprintf("matches for %q", q),
+			}, nil
+		}
+	}
+
+	// Fallback: discover candidate users via query+tokens, then filter post text by query.
+	userMap := map[string]threads.User{}
+	userOrder := make([]threads.User, 0, 80)
+	queries := []string{q}
+	toks := queryTokens(q)
+	for i, t := range toks {
+		if len(t) >= 3 {
+			queries = append(queries, t)
+		}
+		if i+1 < len(toks) {
+			queries = append(queries, t+" "+toks[i+1])
+		}
+		if len(queries) >= 8 {
+			break
+		}
+	}
+	for _, sq := range queries {
+		users, err := s.tc.SearchUsers(ctx, sq, 40)
+		if err != nil {
+			continue
+		}
+		added := 0
+		for _, u := range users.Users {
+			if u.ID != "" && userMap[u.ID].ID == "" {
+				userMap[u.ID] = u
+				userOrder = append(userOrder, u)
+				added++
+			}
+			// Keep diversity across query variants (q, tokens, bigrams),
+			// otherwise one broad token like "lrt" dominates all candidates.
+			if added >= 10 {
+				break
+			}
+		}
+	}
+	if len(userMap) == 0 {
+		return models.FeedPage{
+			Posts:  nil,
+			Source: "search",
+			Hint:   fmt.Sprintf("no results for %q", q),
+		}, nil
 	}
 
 	var (
-		mu    sync.Mutex
-		posts []models.Post
-		wg    sync.WaitGroup
-		sem   = make(chan struct{}, 4)
+		mu            sync.Mutex
+		fallbackPosts []models.Post
+		wg            sync.WaitGroup
+		sem           = make(chan struct{}, 4)
 	)
-	maxUsers := len(users.Users)
-	if maxUsers > 8 {
-		maxUsers = 8
+	maxUsers := len(userOrder)
+	if maxUsers > 60 {
+		maxUsers = 60
 	}
 	for i := 0; i < maxUsers; i++ {
-		u := users.Users[i]
+		u := userOrder[i]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			page, err := s.tc.UserThreads(ctx, u.ID, 3, "")
+			page, err := s.tc.UserThreads(ctx, u.ID, 14, "")
 			if err != nil {
-				// still surface the user as a hit card
-				mu.Lock()
-				posts = append(posts, models.Post{
-					ID:        "user:" + u.ID,
-					Username:  u.Username,
-					UserID:    u.ID,
-					Text:      fmt.Sprintf("%s · %s followers · (no recent posts)", u.FullName, formatFollowers(u.FollowerCount)),
-					Timestamp: time.Now().UTC(),
-					MediaType: "USER",
-				})
-				mu.Unlock()
 				return
 			}
-			got := flattenThreads(page.Threads)
+			got := filterPostsByQuery(flattenThreads(page.Threads), q)
+			if len(got) == 0 {
+				return
+			}
 			mu.Lock()
-			posts = append(posts, got...)
+			fallbackPosts = append(fallbackPosts, got...)
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
 
-	sort.Slice(posts, func(i, j int) bool {
-		return posts[i].Timestamp.After(posts[j].Timestamp)
+	sort.Slice(fallbackPosts, func(i, j int) bool {
+		return fallbackPosts[i].Timestamp.After(fallbackPosts[j].Timestamp)
 	})
+	fallbackPosts = dedupePosts(fallbackPosts)
+	if len(fallbackPosts) > limit {
+		fallbackPosts = fallbackPosts[:limit]
+	}
+	if len(fallbackPosts) == 0 {
+		return models.FeedPage{
+			Posts:  nil,
+			Source: "search",
+			Hint:   fmt.Sprintf("no posts found for %q", q),
+		}, nil
+	}
+	return models.FeedPage{
+		Posts:  fallbackPosts,
+		Source: "search",
+		Hint:   fmt.Sprintf("matches for %q", q),
+	}, nil
+}
+
+func (s *sessionClient) searchWeb(ctx context.Context, q string, limit int) (models.FeedPage, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.threads.com/search?q="+url.QueryEscape(q), nil)
+	if err != nil {
+		return models.FeedPage{}, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) threadterm/1.0")
+	req.Header.Set("X-CSRFToken", s.cfg.Session.CSRFToken)
+	req.Header.Set("Cookie", buildSessionCookie(s.cfg))
+
+	resp, err := (&http.Client{Timeout: 25 * time.Second}).Do(req)
+	if err != nil {
+		return models.FeedPage{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return models.FeedPage{}, fmt.Errorf("search-web %s", resp.Status)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return models.FeedPage{}, err
+	}
+	posts := parsePostsFromSearchHTML(string(body))
+	posts = filterPostsByQuery(posts, q)
+	sort.Slice(posts, func(i, j int) bool { return posts[i].Timestamp.After(posts[j].Timestamp) })
 	posts = dedupePosts(posts)
 	if len(posts) > limit {
 		posts = posts[:limit]
 	}
-	return models.FeedPage{Posts: posts, Source: "search", Hint: "users matching \"" + q + "\""}, nil
+	if len(posts) == 0 {
+		return models.FeedPage{}, nil
+	}
+	return models.FeedPage{
+		Posts:  posts,
+		Source: "search-web",
+		Hint:   fmt.Sprintf("web results for %q", q),
+	}, nil
+}
+
+func buildSessionCookie(cfg *config.Config) string {
+	parts := []string{
+		"sessionid=" + cfg.Session.SessionID,
+		"csrftoken=" + cfg.Session.CSRFToken,
+		"ds_user_id=" + cfg.Session.DSUserID,
+	}
+	if cfg.Session.Mid != "" {
+		parts = append(parts, "mid="+cfg.Session.Mid)
+	}
+	if cfg.Session.IgDid != "" {
+		parts = append(parts, "ig_did="+cfg.Session.IgDid)
+	}
+	return strings.Join(parts, "; ")
+}
+
+var (
+	webIDRe       = regexp.MustCompile(`"id":"([0-9]{12,})"`)
+	webUsernameRe = regexp.MustCompile(`"username":"([^"]{1,64})"`)
+	webTextRe     = regexp.MustCompile(`"text":"((?:\\.|[^"\\]){1,900})"`)
+)
+
+func parsePostsFromSearchHTML(html string) []models.Post {
+	out := make([]models.Post, 0, 100)
+	for _, tm := range webTextRe.FindAllStringSubmatchIndex(html, 400) {
+		if len(tm) < 4 {
+			continue
+		}
+		textRaw := html[tm[2]:tm[3]]
+		text := unescapeJSONString(textRaw)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+
+		// Look backwards in a local window for nearest username/id.
+		start := tm[0] - 4000
+		if start < 0 {
+			start = 0
+		}
+		window := html[start:tm[1]]
+
+		uMatches := webUsernameRe.FindAllStringSubmatch(window, -1)
+		idMatches := webIDRe.FindAllStringSubmatch(window, -1)
+		if len(uMatches) == 0 || len(idMatches) == 0 {
+			continue
+		}
+		username := uMatches[len(uMatches)-1][1]
+		id := idMatches[len(idMatches)-1][1]
+		if username == "" || id == "" {
+			continue
+		}
+
+		out = append(out, models.Post{
+			ID:        id,
+			Username:  username,
+			Text:      text,
+			Timestamp: time.Now().UTC(),
+		})
+	}
+	return dedupePosts(out)
+}
+
+func unescapeJSONString(s string) string {
+	u, err := strconv.Unquote(`"` + s + `"`)
+	if err != nil {
+		return strings.ReplaceAll(s, `\n`, "\n")
+	}
+	return u
+}
+
+// SearchUsers returns account-centric matches and basic profile cards.
+func (s *sessionClient) SearchUsers(q string, limit int) (models.FeedPage, error) {
+	ctx := context.Background()
+	if limit <= 0 {
+		limit = 25
+	}
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return models.FeedPage{}, fmt.Errorf("empty query")
+	}
+	if !s.cfg.HasSession() {
+		return models.FeedPage{}, fmt.Errorf("search needs browser session — run: threadterm login")
+	}
+
+	users, err := s.tc.SearchUsers(ctx, q, max(limit*2, 40))
+	if err != nil {
+		return models.FeedPage{}, err
+	}
+	if len(users.Users) == 0 {
+		return models.FeedPage{
+			Source: "search-users",
+			Hint:   fmt.Sprintf("no users found for %q", q),
+		}, nil
+	}
+
+	posts := make([]models.Post, 0, min(limit, len(users.Users)))
+	for i, u := range users.Users {
+		if i >= limit {
+			break
+		}
+		posts = append(posts, models.Post{
+			ID:        "user:" + u.ID,
+			Username:  u.Username,
+			UserID:    u.ID,
+			Text:      fmt.Sprintf("%s · %s followers", strings.TrimSpace(u.FullName), formatFollowers(u.FollowerCount)),
+			Timestamp: time.Now().UTC(),
+			MediaType: "USER",
+		})
+	}
+	return models.FeedPage{
+		Posts:  posts,
+		Source: "search-users",
+		Hint:   fmt.Sprintf("users matching %q", q),
+	}, nil
 }
 
 // Latest returns the newest posts from a username (scraping / watch helper).
@@ -495,4 +743,72 @@ func dedupePosts(in []models.Post) []models.Post {
 		out = append(out, p)
 	}
 	return out
+}
+
+func queryTokens(q string) []string {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(q, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+	seen := map[string]bool{}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if len(p) < 2 || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+func filterPostsByQuery(posts []models.Post, q string) []models.Post {
+	tokens := queryTokens(q)
+	if len(tokens) == 0 {
+		return posts
+	}
+	primary := tokens[0]
+	var (
+		outStrict  []models.Post
+		outRelaxed []models.Post
+	)
+	for _, p := range posts {
+		text := strings.ToLower(p.Text + " " + p.Username)
+		matched := 0
+		hasPrimary := strings.Contains(text, primary)
+		for _, t := range tokens {
+			if strings.Contains(text, t) {
+				matched++
+			}
+		}
+		if (matched == len(tokens) || (len(tokens) > 2 && matched >= 2)) && (len(tokens) == 1 || hasPrimary) {
+			outStrict = append(outStrict, p)
+			continue
+		}
+		if matched >= 1 {
+			outRelaxed = append(outRelaxed, p)
+		}
+	}
+	if len(outStrict) > 0 {
+		return outStrict
+	}
+	// For multi-term queries, relaxed matching is usually noisy (e.g. "lrt kelana jaya"
+	// becomes random "lrt" usernames). Return empty instead of misleading results.
+	if len(tokens) > 1 {
+		return nil
+	}
+	return outRelaxed
+}
+
+func browserSearchOptional(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "python not found") ||
+		strings.Contains(msg, "playwright not installed") ||
+		strings.Contains(msg, "threads_search.py not found")
 }

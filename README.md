@@ -1,5 +1,9 @@
 # threadterm
 
+[![CI](https://github.com/arifaqyl/threadterm/actions/workflows/ci.yml/badge.svg)](https://github.com/arifaqyl/threadterm/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/arifaqyl/threadterm)](https://github.com/arifaqyl/threadterm/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Threads in your terminal.** Login like bird — auto from Chrome.
 
 ```bash
@@ -13,15 +17,12 @@ threadterm --demo         # try offline first
 
 ---
 
-## Why this isn’t lame
+## Why threadterm
 
-| Project | Stars | Gap |
-|---------|-------|-----|
-| [ndl](https://github.com/pgray/ndl) | ~9 | thin multi-network TUI |
-| [yarn-threads-cli](https://github.com/jeizzon/yarn-threads-cli) | ~25 | CLI only, no polished TUI |
-| Official Graph API apps | — | need Meta developer approval |
-
-**threadterm** = tut-style TUI + agent CLI + cookie auth + themes + in-app login.
+- Browser-cookie login by default (no Meta developer app required)
+- TUI + scriptable JSON CLI in one tool
+- Search, latest, profile, thread views for automation workflows
+- Themeable terminal UX with keyboard-first navigation
 
 ---
 
@@ -72,12 +73,15 @@ threadterm theme ocean
 go install github.com/arifaqyl/threadterm/cmd/threadterm@latest
 ```
 
-Windows (this repo):
+Prebuilt binaries (Windows/macOS/Linux) are published on [GitHub Releases](https://github.com/arifaqyl/threadterm/releases).
+
+Windows (from source):
 
 ```powershell
-cd D:\threadterm
+git clone https://github.com/arifaqyl/threadterm.git
+cd threadterm
 go build -o threadterm.exe ./cmd/threadterm
-D:\threadterm\threadterm.exe --demo
+.\threadterm.exe --demo
 ```
 
 ---
@@ -89,7 +93,8 @@ threadterm login                 # auto from Chrome/Firefox
 threadterm status --json
 threadterm feed --json -n 25     # your following feed
 threadterm feed --discover       # public sample (opt-in)
-threadterm search "LRT KL" --json
+threadterm search "LRT KL" --json        # post search (needs Python + Playwright)
+threadterm search-users "myrapidkl"      # account search
 threadterm latest zuck --json -n 10
 threadterm profile mosseri --json
 threadterm whoami --json
@@ -99,6 +104,13 @@ threadterm doctor
 Automation guide: [docs/AGENTS.md](docs/AGENTS.md)
 
 Env: `THREADS_SESSIONID`, `THREADS_CSRFTOKEN`, `THREADS_DS_USER_ID`, `THREADS_MID`, `THREADS_IG_DID`, `THREADTERM_THEME`, `THREADTERM_DEMO=1`
+
+**Post search** uses headless Chromium via Playwright (same approach as TrafficMY):
+
+```bash
+pip install playwright
+playwright install chromium
+```
 
 ---
 

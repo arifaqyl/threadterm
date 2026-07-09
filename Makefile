@@ -1,7 +1,7 @@
-.PHONY: build run demo test tidy
+.PHONY: build run demo test tidy install release-snapshot
 
 build:
-	go build -o threadterm.exe ./cmd/threadterm
+	go build -ldflags "-X github.com/arifaqyl/threadterm/internal/cli.Version=dev" -o threadterm.exe ./cmd/threadterm
 
 run: build
 	./threadterm.exe --demo
@@ -16,3 +16,6 @@ tidy:
 
 install:
 	go install ./cmd/threadterm
+
+release-snapshot:
+	goreleaser release --snapshot --clean

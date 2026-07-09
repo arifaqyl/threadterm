@@ -9,6 +9,9 @@ threadterm is meant to be called by agents the same way
 # Be logged into https://www.threads.com in Chrome/Firefox
 threadterm login
 threadterm status --json
+
+# Post search renders threads.com/search (needs Playwright once)
+pip install playwright && playwright install chromium
 ```
 
 ## Commands agents should use
@@ -17,6 +20,7 @@ threadterm status --json
 threadterm feed --json -n 25
 threadterm feed --discover --json -n 10
 threadterm search "malaysia transit" --json -n 20
+threadterm search-users "myrapidkl" --json -n 20
 threadterm latest zuck --json -n 10
 threadterm profile mosseri --json
 threadterm thread <id> --json
