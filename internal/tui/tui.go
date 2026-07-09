@@ -66,9 +66,12 @@ type Model struct {
 
 	posts   []models.Post
 	cursor  int
+	// feedOffsets[i] = starting line of post i inside the viewport content.
+	feedOffsets []int
 	thread  *models.Thread
 	profile *models.User
 	pPosts  []models.Post
+	loading bool
 
 	compose textarea.Model
 	replyTo string
@@ -144,6 +147,7 @@ func New(cfg *config.Config, client api.Client) Model {
 		tokenInput:  ti,
 		uidInput:    oid,
 		status:      "ready",
+		loading:     start == viewFeed,
 		vp:          viewport.New(80, 20),
 	}
 }
@@ -253,9 +257,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case feedLoadedMsg:
+		m.loading = false
 		if msg.err != nil {
 			m.err = msg.err.Error()
 			m.status = "error"
+			m.refreshViewport()
 			return m, nil
 		}
 		m.posts = msg.page.Posts
@@ -266,6 +272,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		auth := m.client.AuthStatus()
 		m.status = fmt.Sprintf("%d posts · %s · %s", len(m.posts), auth.Mode, time.Now().Format("15:04"))
 		m.refreshViewport()
+		m.ensureCursorVisible()
 		return m, nil
 
 	case threadLoadedMsg:
@@ -278,6 +285,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view = viewThread
 		m.status = fmt.Sprintf("thread · %d replies", len(msg.th.Replies))
 		m.refreshViewport()
+		m.vp.GotoTop()
 		return m, nil
 
 	case profileLoadedMsg:
@@ -291,6 +299,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view = viewProfile
 		m.status = "@" + msg.user.Username
 		m.refreshViewport()
+		m.vp.GotoTop()
 		return m, nil
 
 	case publishedMsg:
@@ -324,6 +333,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = string(msg)
 		return m, nil
 
+	case tea.MouseMsg:
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
+
 	case tea.KeyMsg:
 		switch m.view {
 		case viewWelcome:
@@ -335,17 +349,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case viewTheme:
 			return m.updateTheme(msg)
 		case viewHelp:
-			if msg.String() == "q" || msg.String() == "esc" || msg.String() == "?" || msg.String() == "h" {
-				m.view = viewFeed
-				m.refreshViewport()
-				return m, nil
-			}
-			return m, nil
+			return m.updateHelp(msg)
 		default:
 			return m.updateNav(msg)
 		}
 	}
 
+	var cmd tea.Cmd
+	m.vp, cmd = m.vp.Update(msg)
+	return m, cmd
+}
+
+func (m Model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc", "?", "h":
+		m.view = viewFeed
+		m.refreshViewport()
+		m.ensureCursorVisible()
+		return m, nil
+	case "j", "down", "ctrl+d", "pgdown":
+		m.vp.LineDown(3)
+		return m, nil
+	case "k", "up", "ctrl+u", "pgup":
+		m.vp.LineUp(3)
+		return m, nil
+	case "g":
+		m.vp.GotoTop()
+		return m, nil
+	case "G":
+		m.vp.GotoBottom()
+		return m, nil
+	}
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
@@ -590,6 +624,7 @@ func (m Model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.view = viewHelp
 		m.refreshViewport()
+		m.vp.GotoTop()
 		return m, nil
 	case "a", "A":
 		m.view = viewLogin
@@ -618,28 +653,68 @@ func (m Model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		m.status = "refreshing…"
+		m.loading = true
+		m.refreshViewport()
 		return m, loadFeed(m.client)
 	case "j", "down":
-		if m.cursor < len(m.posts)-1 {
-			m.cursor++
-			m.refreshViewport()
+		if m.view == viewFeed {
+			if m.cursor < len(m.posts)-1 {
+				m.cursor++
+				m.refreshViewport()
+				m.ensureCursorVisible()
+			}
+			return m, nil
 		}
+		m.vp.LineDown(1)
 		return m, nil
 	case "k", "up":
-		if m.cursor > 0 {
-			m.cursor--
-			m.refreshViewport()
+		if m.view == viewFeed {
+			if m.cursor > 0 {
+				m.cursor--
+				m.refreshViewport()
+				m.ensureCursorVisible()
+			}
+			return m, nil
 		}
+		m.vp.LineUp(1)
+		return m, nil
+	case "pgdown", "ctrl+d":
+		if m.view == viewFeed && len(m.posts) > 0 {
+			step := max(1, m.vp.Height/4)
+			m.cursor = min(len(m.posts)-1, m.cursor+step)
+			m.refreshViewport()
+			m.ensureCursorVisible()
+			return m, nil
+		}
+		m.vp.HalfViewDown()
+		return m, nil
+	case "pgup", "ctrl+u":
+		if m.view == viewFeed && len(m.posts) > 0 {
+			step := max(1, m.vp.Height/4)
+			m.cursor = max(0, m.cursor-step)
+			m.refreshViewport()
+			m.ensureCursorVisible()
+			return m, nil
+		}
+		m.vp.HalfViewUp()
 		return m, nil
 	case "g":
-		m.cursor = 0
-		m.refreshViewport()
+		if m.view == viewFeed {
+			m.cursor = 0
+			m.refreshViewport()
+			m.vp.GotoTop()
+			return m, nil
+		}
+		m.vp.GotoTop()
 		return m, nil
 	case "G":
-		if len(m.posts) > 0 {
+		if m.view == viewFeed && len(m.posts) > 0 {
 			m.cursor = len(m.posts) - 1
 			m.refreshViewport()
+			m.ensureCursorVisible()
+			return m, nil
 		}
+		m.vp.GotoBottom()
 		return m, nil
 	case "enter", "l":
 		if m.view == viewFeed && len(m.posts) > 0 {
@@ -680,6 +755,7 @@ func (m Model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.thread = nil
 			m.profile = nil
 			m.refreshViewport()
+			m.ensureCursorVisible()
 		}
 		return m, nil
 	}
@@ -701,9 +777,12 @@ func (m *Model) layout() {
 }
 
 func (m *Model) refreshViewport() {
+	y := m.vp.YOffset
 	switch m.view {
 	case viewFeed:
-		m.vp.SetContent(m.renderFeedBody())
+		body, offsets := m.renderFeedBody()
+		m.feedOffsets = offsets
+		m.vp.SetContent(body)
 	case viewThread:
 		m.vp.SetContent(m.renderThreadBody())
 	case viewProfile:
@@ -711,7 +790,33 @@ func (m *Model) refreshViewport() {
 	case viewHelp:
 		m.vp.SetContent(m.renderHelp())
 	case viewWelcome, viewLogin, viewTheme, viewCompose:
-		// rendered in View()
+		return
+	}
+	// Keep prior scroll unless content is shorter.
+	m.vp.SetYOffset(y)
+}
+
+// ensureCursorVisible scrolls the feed viewport so the selected post is on screen.
+func (m *Model) ensureCursorVisible() {
+	if m.view != viewFeed || len(m.feedOffsets) == 0 || m.cursor < 0 || m.cursor >= len(m.feedOffsets) {
+		return
+	}
+	start := m.feedOffsets[m.cursor]
+	end := m.vp.TotalLineCount()
+	if m.cursor+1 < len(m.feedOffsets) {
+		end = m.feedOffsets[m.cursor+1]
+	}
+	height := max(1, m.vp.Height)
+	y := m.vp.YOffset
+
+	// If selected block starts above the view, scroll up.
+	if start < y {
+		m.vp.SetYOffset(start)
+		return
+	}
+	// If selected block ends below the view, scroll down enough to show it.
+	if end > y+height {
+		m.vp.SetYOffset(max(0, end-height))
 	}
 }
 
@@ -952,18 +1057,26 @@ func (m Model) renderCompose() string {
 	)
 }
 
-func (m Model) renderFeedBody() string {
+func (m Model) renderFeedBody() (string, []int) {
 	s := m.styles
+	if m.loading && len(m.posts) == 0 {
+		return s.muted.Render("\n  loading discovery feed…\n  (first load can take a few seconds)\n"), nil
+	}
 	if len(m.posts) == 0 {
-		return s.muted.Render("\n  loading discovery feed…\n  if empty: press r, or search via CLI:\n  threadterm search malaysia --json\n")
+		return s.muted.Render("\n  no posts — press r to refresh\n  or: threadterm search malaysia --json\n"), nil
 	}
 	var b strings.Builder
-	b.WriteString(s.muted.Render(fmt.Sprintf("  FEED  ·  %d  ·  j/k move  ·  enter open\n\n", len(m.posts))))
+	header := s.muted.Render(fmt.Sprintf("  FEED  ·  %d  ·  j/k move  ·  pgup/pgdn  ·  enter open\n\n", len(m.posts)))
+	b.WriteString(header)
+	offsets := make([]int, len(m.posts))
+	line := strings.Count(header, "\n")
 	for i, p := range m.posts {
-		b.WriteString(m.renderPostCard(p, i == m.cursor))
-		b.WriteString("\n")
+		offsets[i] = line
+		card := m.renderPostCard(p, i == m.cursor) + "\n"
+		b.WriteString(card)
+		line += strings.Count(card, "\n")
 	}
-	return b.String()
+	return b.String(), offsets
 }
 
 func (m Model) renderThreadBody() string {
@@ -1019,7 +1132,8 @@ func (m Model) renderHelp() string {
 		s.section.Render(" HELP "),
 		"",
 		s.accent.Render("Navigation"),
-		"  j/k  ↓/↑      move",
+		"  j/k  ↓/↑      move (follows selection)",
+		"  pgup/pgdn     jump · mouse wheel scroll",
 		"  enter / l     open thread",
 		"  g / G         top / bottom",
 		"  h / esc       back",
@@ -1146,7 +1260,11 @@ func max(a, b int) int {
 
 // Run starts the Bubble Tea program.
 func Run(cfg *config.Config, client api.Client) error {
-	p := tea.NewProgram(New(cfg, client), tea.WithAltScreen())
+	p := tea.NewProgram(
+		New(cfg, client),
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
 	_, err := p.Run()
 	return err
 }
