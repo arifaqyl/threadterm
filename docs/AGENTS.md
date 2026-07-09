@@ -15,6 +15,7 @@ threadterm status --json
 
 ```bash
 threadterm feed --json -n 25
+threadterm feed --discover --json -n 10
 threadterm search "malaysia transit" --json -n 20
 threadterm latest zuck --json -n 10
 threadterm profile mosseri --json

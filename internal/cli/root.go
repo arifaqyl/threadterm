@@ -12,6 +12,7 @@ import (
 	"github.com/arifaqyl/threadterm/internal/api"
 	"github.com/arifaqyl/threadterm/internal/auth"
 	"github.com/arifaqyl/threadterm/internal/config"
+	"github.com/arifaqyl/threadterm/internal/models"
 	"github.com/arifaqyl/threadterm/internal/tui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -88,24 +89,41 @@ func printJSON(v any) error {
 }
 
 func cmdFeed() *cobra.Command {
-	return &cobra.Command{
+	var discover bool
+	cmd := &cobra.Command{
 		Use:   "feed",
-		Short: "Live discovery feed (following + seeds) or home timeline",
+		Short: "Your following feed (or home timeline with write login)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, c, err := makeClient()
 			if err != nil {
 				return err
 			}
-			page, err := c.Feed("", limit)
+			var page models.FeedPage
+			if discover {
+				page, err = c.Discover(limit)
+			} else {
+				page, err = c.Feed("", limit)
+			}
 			if err != nil {
 				return err
 			}
 			if jsonOut {
 				return printJSON(page)
 			}
-			if len(page.Posts) == 0 {
-				fmt.Println("no posts yet — try: threadterm search malaysia")
+			if page.Hint != "" && len(page.Posts) == 0 {
+				fmt.Println(page.Hint)
 				return nil
+			}
+			if len(page.Posts) == 0 {
+				fmt.Println("no posts — try: threadterm search malaysia  or  threadterm feed --discover")
+				return nil
+			}
+			if page.Source != "" {
+				fmt.Printf("# source=%s", page.Source)
+				if page.Hint != "" {
+					fmt.Printf(" · %s", page.Hint)
+				}
+				fmt.Println()
 			}
 			for _, p := range page.Posts {
 				fmt.Printf("%s  @%s  ♥%d\n  %s\n\n", p.ID, p.Username, p.LikeCount, indent(p.Text, 2))
@@ -113,6 +131,8 @@ func cmdFeed() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&discover, "discover", false, "public sample feed (zuck/threads/…) — not your following")
+	return cmd
 }
 
 func cmdPost() *cobra.Command {

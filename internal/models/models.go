@@ -44,6 +44,10 @@ type Thread struct {
 type FeedPage struct {
 	Posts      []Post `json:"posts"`
 	NextCursor string `json:"next_cursor,omitempty"`
+	// Source: home | following | discover | search | empty
+	Source string `json:"source,omitempty"`
+	// Hint explains empty / fallback feeds (shown in TUI/CLI).
+	Hint string `json:"hint,omitempty"`
 }
 
 // PublishResult is returned after creating a post.

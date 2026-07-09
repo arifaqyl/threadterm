@@ -21,6 +21,7 @@ const graphBase = "https://graph.threads.net/v1.0"
 type Client interface {
 	AuthStatus() models.AuthStatus
 	Feed(cursor string, limit int) (models.FeedPage, error)
+	Discover(limit int) (models.FeedPage, error)
 	Thread(id string) (models.Thread, error)
 	Profile(username string) (models.User, []models.Post, error)
 	Search(q string, limit int) (models.FeedPage, error)
@@ -69,6 +70,9 @@ func (b *brokenClient) AuthStatus() models.AuthStatus {
 func (b *brokenClient) Feed(string, int) (models.FeedPage, error) {
 	return models.FeedPage{}, b.err
 }
+func (b *brokenClient) Discover(int) (models.FeedPage, error) {
+	return models.FeedPage{}, b.err
+}
 func (b *brokenClient) Thread(string) (models.Thread, error) { return models.Thread{}, b.err }
 func (b *brokenClient) Profile(string) (models.User, []models.Post, error) {
 	return models.User{}, nil, b.err
@@ -95,6 +99,15 @@ type demoAdapter struct {
 func (d *demoAdapter) AuthStatus() models.AuthStatus { return d.store.AuthStatus() }
 func (d *demoAdapter) Feed(c string, n int) (models.FeedPage, error) {
 	return d.store.Feed(c, n)
+}
+func (d *demoAdapter) Discover(n int) (models.FeedPage, error) {
+	page, err := d.store.Feed("", n)
+	if err != nil {
+		return page, err
+	}
+	page.Source = "discover"
+	page.Hint = "demo sample feed"
+	return page, nil
 }
 func (d *demoAdapter) Thread(id string) (models.Thread, error) { return d.store.Thread(id) }
 func (d *demoAdapter) Profile(u string) (models.User, []models.Post, error) {
@@ -238,11 +251,15 @@ func (g *graphClient) Feed(_ string, limit int) (models.FeedPage, error) {
 	for _, m := range resp.Data {
 		posts = append(posts, m.toPost())
 	}
-	page := models.FeedPage{Posts: posts}
+	page := models.FeedPage{Posts: posts, Source: "profile"}
 	if resp.Paging != nil {
 		page.NextCursor = resp.Paging.Cursors.After
 	}
 	return page, nil
+}
+
+func (g *graphClient) Discover(limit int) (models.FeedPage, error) {
+	return models.FeedPage{}, fmt.Errorf("discover needs cookie session — run: threadterm login")
 }
 
 func (g *graphClient) Thread(id string) (models.Thread, error) {

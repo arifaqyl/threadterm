@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/arifaqyl/threadterm/internal/api"
 	"github.com/arifaqyl/threadterm/internal/auth"
 	"github.com/arifaqyl/threadterm/internal/config"
@@ -27,6 +28,7 @@ const (
 	viewHelp
 	viewLogin
 	viewTheme
+	viewSearch
 )
 
 type feedLoadedMsg struct {
@@ -68,6 +70,8 @@ type Model struct {
 	cursor  int
 	// feedOffsets[i] = starting line of post i inside the viewport content.
 	feedOffsets []int
+	feedSource  string
+	feedHint    string
 	thread  *models.Thread
 	profile *models.User
 	pPosts  []models.Post
@@ -76,9 +80,11 @@ type Model struct {
 	compose textarea.Model
 	replyTo string
 
+	searchInput textinput.Model
+
 	// login form
 	// 0=menu 1=cookies 2=user 3=pass 4=official-token 5=official-uid 6=oauth
-	loginStep  int
+	loginStep   int
 	cookieInput textinput.Model
 	userInput   textinput.Model
 	passInput   textinput.Model
@@ -129,6 +135,11 @@ func New(cfg *config.Config, client api.Client) Model {
 	oid.CharLimit = 64
 	oid.Width = 48
 
+	si := textinput.New()
+	si.Placeholder = "search users / topics…"
+	si.CharLimit = 80
+	si.Width = 48
+
 	start := viewFeed
 	if !cfg.SeenWelcome {
 		start = viewWelcome
@@ -146,6 +157,7 @@ func New(cfg *config.Config, client api.Client) Model {
 		passInput:   pi,
 		tokenInput:  ti,
 		uidInput:    oid,
+		searchInput: si,
 		status:      "ready",
 		loading:     start == viewFeed,
 		vp:          viewport.New(80, 20),
@@ -163,6 +175,20 @@ func (m Model) Init() tea.Cmd {
 func loadFeed(c api.Client) tea.Cmd {
 	return func() tea.Msg {
 		page, err := c.Feed("", 40)
+		return feedLoadedMsg{page: page, err: err}
+	}
+}
+
+func loadDiscover(c api.Client) tea.Cmd {
+	return func() tea.Msg {
+		page, err := c.Discover(40)
+		return feedLoadedMsg{page: page, err: err}
+	}
+}
+
+func loadSearch(c api.Client, q string) tea.Cmd {
+	return func() tea.Msg {
+		page, err := c.Search(q, 40)
 		return feedLoadedMsg{page: page, err: err}
 	}
 }
@@ -265,13 +291,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.posts = msg.page.Posts
+		m.feedSource = msg.page.Source
+		m.feedHint = msg.page.Hint
+		m.cursor = 0
 		if m.cursor >= len(m.posts) {
 			m.cursor = max(0, len(m.posts)-1)
 		}
 		m.err = ""
-		auth := m.client.AuthStatus()
-		m.status = fmt.Sprintf("%d posts · %s · %s", len(m.posts), auth.Mode, time.Now().Format("15:04"))
+		src := m.feedSource
+		if src == "" {
+			src = "feed"
+		}
+		m.status = fmt.Sprintf("%d posts · %s · %s", len(m.posts), src, time.Now().Format("15:04"))
+		if m.feedHint != "" && len(m.posts) == 0 {
+			m.status = m.feedHint
+		}
+		m.view = viewFeed
 		m.refreshViewport()
+		m.vp.GotoTop()
 		m.ensureCursorVisible()
 		return m, nil
 
@@ -333,11 +370,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = string(msg)
 		return m, nil
 
-	case tea.MouseMsg:
-		var cmd tea.Cmd
-		m.vp, cmd = m.vp.Update(msg)
-		return m, cmd
-
 	case tea.KeyMsg:
 		switch m.view {
 		case viewWelcome:
@@ -350,6 +382,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateTheme(msg)
 		case viewHelp:
 			return m.updateHelp(msg)
+		case viewSearch:
+			return m.updateSearch(msg)
 		default:
 			return m.updateNav(msg)
 		}
@@ -357,6 +391,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
+	return m, cmd
+}
+
+func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.view = viewFeed
+		m.searchInput.Blur()
+		m.searchInput.SetValue("")
+		m.refreshViewport()
+		return m, nil
+	case "enter":
+		q := strings.TrimSpace(m.searchInput.Value())
+		m.searchInput.Blur()
+		m.view = viewFeed
+		if q == "" {
+			m.refreshViewport()
+			return m, nil
+		}
+		m.status = "searching " + q + "…"
+		m.loading = true
+		m.refreshViewport()
+		return m, loadSearch(m.client, q)
+	}
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
 	return m, cmd
 }
 
@@ -651,11 +711,41 @@ func (m Model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "theme · " + th.Name
 		m.refreshViewport()
 		return m, nil
-	case "r":
-		m.status = "refreshing…"
+	case "r", "f":
+		m.status = "refreshing following…"
 		m.loading = true
 		m.refreshViewport()
 		return m, loadFeed(m.client)
+	case "d":
+		m.status = "loading public discover…"
+		m.loading = true
+		m.refreshViewport()
+		return m, loadDiscover(m.client)
+	case "/":
+		m.view = viewSearch
+		m.searchInput.SetValue("")
+		m.searchInput.Focus()
+		return m, textinput.Blink
+	case "y", "Y":
+		if len(m.posts) == 0 || m.cursor < 0 || m.cursor >= len(m.posts) {
+			return m, nil
+		}
+		p := m.posts[m.cursor]
+		text := p.Text
+		label := "copied text"
+		if p.Permalink != "" {
+			text = p.Permalink
+			label = "copied link"
+		} else if text == "" {
+			text = p.ID
+			label = "copied id"
+		}
+		if err := clipboard.WriteAll(text); err != nil {
+			m.status = "copy failed: " + err.Error()
+		} else {
+			m.status = label
+		}
+		return m, nil
 	case "j", "down":
 		if m.view == viewFeed {
 			if m.cursor < len(m.posts)-1 {
@@ -834,6 +924,8 @@ func (m Model) View() string {
 		return m.frame(m.renderThemePicker())
 	case viewCompose:
 		return m.frame(m.renderCompose())
+	case viewSearch:
+		return m.frame(m.renderSearch())
 	default:
 		body := m.vp.View()
 		if m.width >= 70 {
@@ -860,7 +952,7 @@ func (m Model) frame(body string) string {
 	if m.err != "" {
 		footerBits = append(footerBits, m.styles.err.Render(m.err))
 	}
-	footerBits = append(footerBits, m.styles.muted.Render("? help · a login · t theme · q quit"))
+	footerBits = append(footerBits, m.styles.muted.Render("/ search · y copy · ? help · q quit"))
 	footer := m.styles.footer.Render("  " + strings.Join(footerBits, "  ·  "))
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
@@ -871,7 +963,9 @@ func (m Model) renderSidebar() string {
 	auth := m.client.AuthStatus()
 	items := []string{
 		s.accent.Render("NAV"),
-		m.navItem("f", "feed", m.view == viewFeed),
+		m.navItem("f", "feed", m.view == viewFeed && m.feedSource != "search" && m.feedSource != "discover"),
+		m.navItem("/", "search", m.view == viewSearch || m.feedSource == "search"),
+		m.navItem("d", "discover", m.feedSource == "discover"),
 		m.navItem("c", "compose", m.view == viewCompose),
 		m.navItem("a", "login", m.view == viewLogin),
 		m.navItem("t", "theme", m.view == viewTheme),
@@ -1057,16 +1151,41 @@ func (m Model) renderCompose() string {
 	)
 }
 
+func (m Model) renderSearch() string {
+	s := m.styles
+	return strings.Join([]string{
+		s.section.Render(" SEARCH "),
+		"",
+		s.muted.Render("Find users, then show their latest posts"),
+		"",
+		m.searchInput.View(),
+		"",
+		s.hint.Render("enter search · esc cancel"),
+		s.muted.Render("CLI: threadterm search malaysia --json"),
+	}, "\n")
+}
+
 func (m Model) renderFeedBody() (string, []int) {
 	s := m.styles
 	if m.loading && len(m.posts) == 0 {
-		return s.muted.Render("\n  loading discovery feed…\n  (first load can take a few seconds)\n"), nil
+		return s.muted.Render("\n  loading your following feed…\n  (first load can take a few seconds)\n"), nil
 	}
 	if len(m.posts) == 0 {
-		return s.muted.Render("\n  no posts — press r to refresh\n  or: threadterm search malaysia --json\n"), nil
+		hint := m.feedHint
+		if hint == "" {
+			hint = "no posts from people you follow"
+		}
+		return s.muted.Render(fmt.Sprintf(
+			"\n  %s\n\n  /  search users\n  d  public discover (not your feed)\n  r  refresh following\n",
+			hint,
+		)), nil
+	}
+	src := m.feedSource
+	if src == "" {
+		src = "feed"
 	}
 	var b strings.Builder
-	header := s.muted.Render(fmt.Sprintf("  FEED  ·  %d  ·  j/k move  ·  pgup/pgdn  ·  enter open\n\n", len(m.posts)))
+	header := s.muted.Render(fmt.Sprintf("  %s  ·  %d  ·  j/k  ·  / search  ·  y copy  ·  enter open\n\n", strings.ToUpper(src), len(m.posts)))
 	b.WriteString(header)
 	offsets := make([]int, len(m.posts))
 	line := strings.Count(header, "\n")
@@ -1133,11 +1252,14 @@ func (m Model) renderHelp() string {
 		"",
 		s.accent.Render("Navigation"),
 		"  j/k  ↓/↑      move (follows selection)",
-		"  pgup/pgdn     jump · mouse wheel scroll",
+		"  pgup/pgdn     jump",
+		"  /             search users",
+		"  y             copy link/text (clipboard)",
+		"  d             public discover (not your feed)",
+		"  f / r         your following feed",
 		"  enter / l     open thread",
 		"  g / G         top / bottom",
 		"  h / esc       back",
-		"  r             refresh feed",
 		"",
 		s.accent.Render("Actions"),
 		"  c / n         compose",
@@ -1154,11 +1276,12 @@ func (m Model) renderHelp() string {
 		"",
 		s.accent.Render("CLI (outside TUI)"),
 		"  threadterm feed --json",
+		"  threadterm feed --discover",
+		"  threadterm search malaysia --json",
 		"  threadterm post \"hello\"",
 		"  threadterm login",
-		"  threadterm search golang",
-		"  threadterm doctor",
 		"",
+		s.muted.Render("Select/copy text: mouse select works in terminal (mouse capture off)."),
 		s.muted.Render("Auth guide: docs/AUTH.md · Launch copy: docs/LAUNCH_X.md"),
 		s.hint.Render("esc / ? to close"),
 	}, "\n")
@@ -1260,10 +1383,10 @@ func max(a, b int) int {
 
 // Run starts the Bubble Tea program.
 func Run(cfg *config.Config, client api.Client) error {
+	// No mouse capture — so you can select/copy text in the terminal normally.
 	p := tea.NewProgram(
 		New(cfg, client),
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	)
 	_, err := p.Run()
 	return err

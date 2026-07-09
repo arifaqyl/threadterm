@@ -19,8 +19,7 @@ type sessionClient struct {
 	tc  *threads.Client
 }
 
-// Default discovery seeds so cookie-only accounts still get a live feed
-// (home timeline requires Bearer; many sessions are cookie-only).
+// Opt-in discovery seeds (NOT your feed). Used only by Discover / feed --discover.
 var discoverySeeds = []string{
 	"zuck", "mosseri", "meta", "instagram", "threads",
 	"golang", "openai", "anthropicai",
@@ -88,20 +87,30 @@ func (s *sessionClient) Feed(_ string, limit int) (models.FeedPage, error) {
 	if s.cfg.HasBearer() {
 		page, err := s.tc.HomeTimeline(ctx, limit, "")
 		if err == nil && len(page.Threads) > 0 {
-			return mapPostPage(page), nil
+			out := mapPostPage(page)
+			out.Source = "home"
+			return out, nil
 		}
 	}
 
-	// 2) Cookie session: build a live discovery feed.
-	//    - people you follow (if any)
-	//    - plus popular seeds / search hits
-	//    so empty personal profiles aren't a blank TUI.
-	posts, err := s.discoveryFeed(ctx, limit)
-	if err != nil {
-		return models.FeedPage{}, err
-	}
-	if len(posts) > 0 {
-		return models.FeedPage{Posts: posts}, nil
+	// 2) Cookie session: ONLY people you follow (your feed), never seed spam.
+	if s.cfg.HasSession() {
+		posts, followingN, err := s.followingFeed(ctx, limit)
+		if err != nil {
+			return models.FeedPage{}, err
+		}
+		if len(posts) > 0 {
+			return models.FeedPage{
+				Posts:  posts,
+				Source: "following",
+				Hint:   fmt.Sprintf("%d accounts you follow", followingN),
+			}, nil
+		}
+		hint := "you're not following anyone (or Threads hid the list) — press / to search, or: threadterm feed --discover"
+		if followingN > 0 {
+			hint = fmt.Sprintf("following %d accounts but no recent posts — press / to search", followingN)
+		}
+		return models.FeedPage{Posts: nil, Source: "empty", Hint: hint}, nil
 	}
 
 	// 3) Last resort: own profile threads.
@@ -112,45 +121,85 @@ func (s *sessionClient) Feed(_ string, limit int) (models.FeedPage, error) {
 	if uid != "" {
 		page, err := s.tc.UserThreads(ctx, uid, limit, "")
 		if err == nil {
-			return mapPostPage(page), nil
+			out := mapPostPage(page)
+			out.Source = "profile"
+			return out, nil
 		}
 	}
-	return models.FeedPage{Posts: nil}, nil
+	return models.FeedPage{Posts: nil, Source: "empty", Hint: "no posts — try: threadterm search malaysia"}, nil
 }
 
-func (s *sessionClient) discoveryFeed(ctx context.Context, limit int) ([]models.Post, error) {
-	usernames := map[string]string{} // username -> id (id may be empty)
+// Discover is an opt-in public sample feed (zuck/threads/etc). Not your timeline.
+func (s *sessionClient) Discover(limit int) (models.FeedPage, error) {
+	ctx := context.Background()
+	if limit <= 0 {
+		limit = 25
+	}
+	posts, err := s.seedFeed(ctx, discoverySeeds, limit)
+	if err != nil {
+		return models.FeedPage{}, err
+	}
+	return models.FeedPage{
+		Posts:  posts,
+		Source: "discover",
+		Hint:   "public sample — not your following feed",
+	}, nil
+}
 
-	// Following list (often empty for new accounts — that's fine).
+// followingFeed pulls recent posts from accounts you follow. No seeds.
+func (s *sessionClient) followingFeed(ctx context.Context, limit int) ([]models.Post, int, error) {
 	uid := s.cfg.Session.DSUserID
 	if uid == "" {
 		uid = s.cfg.Bearer.UserID
 	}
-	if uid != "" && s.cfg.HasSession() {
-		if page, err := s.tc.GetFollowing(ctx, uid, 30, ""); err == nil {
-			for _, u := range page.Users {
-				usernames[strings.ToLower(u.Username)] = u.ID
-			}
+	if uid == "" {
+		return nil, 0, nil
+	}
+
+	following := map[string]string{}
+	cursor := ""
+	for pages := 0; pages < 3; pages++ {
+		page, err := s.tc.GetFollowing(ctx, uid, 50, cursor)
+		if err != nil {
+			break
 		}
+		for _, u := range page.Users {
+			following[strings.ToLower(u.Username)] = u.ID
+		}
+		if !page.HasNext || page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if len(following) == 0 {
+		return nil, 0, nil
 	}
 
-	// Seeds so feed is never blank.
-	for _, seed := range discoverySeeds {
-		usernames[strings.ToLower(seed)] = ""
-	}
+	posts, err := s.postsFromUsers(ctx, following, 4, limit, 24)
+	return posts, len(following), err
+}
 
-	// Resolve missing IDs + pull recent threads concurrently (capped).
+func (s *sessionClient) seedFeed(ctx context.Context, seeds []string, limit int) ([]models.Post, error) {
+	users := map[string]string{}
+	for _, seed := range seeds {
+		users[strings.ToLower(seed)] = ""
+	}
+	return s.postsFromUsers(ctx, users, 3, limit, 12)
+}
+
+// postsFromUsers fetches recent threads for username→id map (id may be empty).
+func (s *sessionClient) postsFromUsers(ctx context.Context, users map[string]string, perUser, limit, maxJobs int) ([]models.Post, error) {
 	type job struct {
 		name string
 		id   string
 	}
-	jobs := make([]job, 0, len(usernames))
-	for name, id := range usernames {
+	jobs := make([]job, 0, len(users))
+	for name, id := range users {
 		jobs = append(jobs, job{name: name, id: id})
 	}
-	// Cap how many profiles we hit per refresh.
-	if len(jobs) > 12 {
-		jobs = jobs[:12]
+	sort.Slice(jobs, func(i, j int) bool { return jobs[i].name < jobs[j].name })
+	if maxJobs > 0 && len(jobs) > maxJobs {
+		jobs = jobs[:maxJobs]
 	}
 
 	var (
@@ -175,7 +224,7 @@ func (s *sessionClient) discoveryFeed(ctx context.Context, limit int) ([]models.
 				}
 				id = u.ID
 			}
-			page, err := s.tc.UserThreads(ctx, id, 3, "")
+			page, err := s.tc.UserThreads(ctx, id, perUser, "")
 			if err != nil {
 				return
 			}
@@ -304,7 +353,7 @@ func (s *sessionClient) Search(q string, limit int) (models.FeedPage, error) {
 	if len(posts) > limit {
 		posts = posts[:limit]
 	}
-	return models.FeedPage{Posts: posts}, nil
+	return models.FeedPage{Posts: posts, Source: "search", Hint: "users matching \"" + q + "\""}, nil
 }
 
 // Latest returns the newest posts from a username (scraping / watch helper).

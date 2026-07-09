@@ -30,6 +30,10 @@ threadterm --demo         # try offline first
 | Key | Action |
 |-----|--------|
 | `j` / `k` | move |
+| `/` | **search** users |
+| `y` | copy link/text to clipboard |
+| `f` / `r` | your following feed |
+| `d` | public discover (not your feed) |
 | `enter` | open thread |
 | `c` | compose |
 | `R` / `L` | reply / like |
@@ -37,6 +41,8 @@ threadterm --demo         # try offline first
 | `t` / `T` | theme picker / cycle |
 | `?` | help |
 | `q` | quit |
+
+Mouse select/copy works in the terminal (mouse capture is off). Use `y` to yank the selected post link.
 
 ### Login
 
@@ -81,7 +87,8 @@ D:\threadterm\threadterm.exe --demo
 ```bash
 threadterm login                 # auto from Chrome/Firefox
 threadterm status --json
-threadterm feed --json -n 25     # discovery feed
+threadterm feed --json -n 25     # your following feed
+threadterm feed --discover       # public sample (opt-in)
 threadterm search "LRT KL" --json
 threadterm latest zuck --json -n 10
 threadterm profile mosseri --json
