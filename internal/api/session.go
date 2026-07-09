@@ -101,6 +101,19 @@ func (s *sessionClient) Feed(_ string, limit int) (models.FeedPage, error) {
 
 	// 2) Cookie session: ONLY people you follow (your feed), never seed spam.
 	if s.cfg.HasSession() {
+		if posts, err := browser.FeedPosts(ctx, s.cfg, limit); err == nil && len(posts) > 0 {
+			sort.Slice(posts, func(i, j int) bool { return posts[i].Timestamp.After(posts[j].Timestamp) })
+			posts = dedupePosts(posts)
+			if len(posts) > limit {
+				posts = posts[:limit]
+			}
+			return models.FeedPage{
+				Posts:  posts,
+				Source: "home-browser",
+				Hint:   "rendered from your Threads home",
+			}, nil
+		}
+
 		posts, followingN, err := s.followingFeed(ctx, limit)
 		if err != nil {
 			return models.FeedPage{}, err

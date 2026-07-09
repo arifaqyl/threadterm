@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scrape threads.com/search via Playwright (same lane as aduanmy)."""
+"""Scrape Threads search/home via Playwright."""
 from __future__ import annotations
 
 import json
@@ -93,6 +93,38 @@ def _parse_ts(raw: str) -> str:
         return ""
 
 
+def _collect_posts(page, page_url: str, limit: int, scroll_rounds: int = 3) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    page.goto(page_url, wait_until="domcontentloaded", timeout=35000)
+    page.wait_for_timeout(1800)
+    for _ in range(scroll_rounds):
+        batch = page.locator(SEARCH_POST_SELECTOR).evaluate_all(SEARCH_POST_JS)
+        for item in batch:
+            href = item.get("href", "")
+            if not href or href in seen:
+                continue
+            seen.add(href)
+            post_id, username = _parse_post_url(href)
+            text = (item.get("preview_text") or "").strip()
+            if not post_id or not username or len(text) < 8:
+                continue
+            rows.append(
+                {
+                    "id": post_id,
+                    "username": username,
+                    "text": text,
+                    "url": href,
+                    "timestamp": _parse_ts(item.get("created_at", "")),
+                }
+            )
+        if len(rows) >= limit:
+            break
+        page.mouse.wheel(0, 2400)
+        page.wait_for_timeout(600)
+    return rows[:limit]
+
+
 def search_posts(session: dict, query: str, limit: int = 25) -> list[dict]:
     if sync_playwright is None:
         raise RuntimeError("playwright not installed — pip install playwright && playwright install chromium")
@@ -100,8 +132,6 @@ def search_posts(session: dict, query: str, limit: int = 25) -> list[dict]:
     if not any(c["name"] == "sessionid" for c in cookies):
         raise RuntimeError("missing sessionid cookie")
 
-    rows: list[dict] = []
-    seen: set[str] = set()
     search_url = f"https://www.threads.com/search?q={quote_plus(query)}&filter=recent"
 
     with sync_playwright() as p:
@@ -109,35 +139,28 @@ def search_posts(session: dict, query: str, limit: int = 25) -> list[dict]:
         context = browser.new_context(viewport={"width": 1280, "height": 2200})
         context.add_cookies(cookies)
         page = context.new_page()
-        page.goto(search_url, wait_until="domcontentloaded", timeout=35000)
-        page.wait_for_timeout(1800)
-        for _ in range(3):
-            batch = page.locator(SEARCH_POST_SELECTOR).evaluate_all(SEARCH_POST_JS)
-            for item in batch:
-                href = item.get("href", "")
-                if not href or href in seen:
-                    continue
-                seen.add(href)
-                post_id, username = _parse_post_url(href)
-                text = (item.get("preview_text") or "").strip()
-                if not post_id or not username or len(text) < 8:
-                    continue
-                rows.append(
-                    {
-                        "id": post_id,
-                        "username": username,
-                        "text": text,
-                        "url": href,
-                        "timestamp": _parse_ts(item.get("created_at", "")),
-                    }
-                )
-            if len(rows) >= limit:
-                break
-            page.mouse.wheel(0, 2400)
-            page.wait_for_timeout(600)
+        rows = _collect_posts(page, search_url, limit, scroll_rounds=3)
         context.close()
         browser.close()
 
+    return rows[:limit]
+
+
+def feed_posts(session: dict, limit: int = 25) -> list[dict]:
+    if sync_playwright is None:
+        raise RuntimeError("playwright not installed — pip install playwright && playwright install chromium")
+    cookies = _cookies_from_session(session)
+    if not any(c["name"] == "sessionid" for c in cookies):
+        raise RuntimeError("missing sessionid cookie")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": 1280, "height": 2200})
+        context.add_cookies(cookies)
+        page = context.new_page()
+        rows = _collect_posts(page, "https://www.threads.com/", limit, scroll_rounds=4)
+        context.close()
+        browser.close()
     return rows[:limit]
 
 
@@ -149,15 +172,20 @@ def main() -> int:
         return 2
 
     session = payload.get("session") or {}
+    mode = (payload.get("mode") or "search").strip().lower()
     query = (payload.get("query") or "").strip()
     limit = int(payload.get("limit") or 25)
-    if not query:
+    if mode == "search" and not query:
         print(json.dumps({"error": "empty query"}))
         return 2
 
     try:
-        posts = search_posts(session, query, limit=limit)
-        print(json.dumps({"posts": posts, "source": "search-browser"}))
+        if mode == "feed":
+            posts = feed_posts(session, limit=limit)
+            print(json.dumps({"posts": posts, "source": "home-browser"}))
+        else:
+            posts = search_posts(session, query, limit=limit)
+            print(json.dumps({"posts": posts, "source": "search-browser"}))
         return 0
     except Exception as exc:
         print(json.dumps({"error": str(exc)}))

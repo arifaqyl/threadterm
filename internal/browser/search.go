@@ -18,6 +18,7 @@ import (
 
 type searchRequest struct {
 	Session config.SessionCookies `json:"session"`
+	Mode    string                `json:"mode,omitempty"`
 	Query   string                `json:"query"`
 	Limit   int                   `json:"limit"`
 }
@@ -60,6 +61,7 @@ func SearchPosts(ctx context.Context, cfg *config.Config, query string, limit in
 
 	reqBody, err := json.Marshal(searchRequest{
 		Session: cfg.Session,
+		Mode:    "search",
 		Query:   query,
 		Limit:   limit,
 	})
@@ -92,6 +94,73 @@ func SearchPosts(ctx context.Context, cfg *config.Config, query string, limit in
 		return nil, fmt.Errorf("browser search: %s", resp.Error)
 	}
 
+	out := make([]models.Post, 0, len(resp.Posts))
+	for _, p := range resp.Posts {
+		if p.ID == "" || p.Username == "" || strings.TrimSpace(p.Text) == "" {
+			continue
+		}
+		ts := time.Now().UTC()
+		if p.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339, p.Timestamp); err == nil {
+				ts = parsed.UTC()
+			}
+		}
+		out = append(out, models.Post{
+			ID:        p.ID,
+			Username:  p.Username,
+			Text:      p.Text,
+			Timestamp: ts,
+		})
+	}
+	return out, nil
+}
+
+// FeedPosts renders threads.com home feed via Playwright.
+func FeedPosts(ctx context.Context, cfg *config.Config, limit int) ([]models.Post, error) {
+	if cfg == nil || !cfg.HasSession() {
+		return nil, fmt.Errorf("browser feed needs session cookies")
+	}
+	if limit <= 0 {
+		limit = 25
+	}
+	script, err := searchScriptPath()
+	if err != nil {
+		return nil, err
+	}
+	python, err := pythonBin()
+	if err != nil {
+		return nil, err
+	}
+	reqBody, err := json.Marshal(searchRequest{
+		Session: cfg.Session,
+		Mode:    "feed",
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 75*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, python, script)
+	cmd.Stdin = bytes.NewReader(reqBody)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("browser feed: %s", msg)
+	}
+	var resp searchResponse
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		return nil, fmt.Errorf("browser feed json: %w", err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("browser feed: %s", resp.Error)
+	}
 	out := make([]models.Post, 0, len(resp.Posts))
 	for _, p := range resp.Posts {
 		if p.ID == "" || p.Username == "" || strings.TrimSpace(p.Text) == "" {
