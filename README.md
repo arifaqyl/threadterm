@@ -76,18 +76,20 @@ D:\threadterm\threadterm.exe --demo
 
 ---
 
-## CLI
+## CLI (agent-friendly)
 
 ```bash
-threadterm login --cookies "sessionid=…; csrftoken=…; ds_user_id=…"
-threadterm feed --json
-threadterm post "hello"
-threadterm search golang
-threadterm profile zuck
-threadterm whoami
+threadterm login                 # auto from Chrome/Firefox
+threadterm status --json
+threadterm feed --json -n 25     # discovery feed
+threadterm search "LRT KL" --json
+threadterm latest zuck --json -n 10
+threadterm profile mosseri --json
+threadterm whoami --json
 threadterm doctor
-threadterm theme orchid
 ```
+
+Automation guide: [docs/AGENTS.md](docs/AGENTS.md)
 
 Env: `THREADS_SESSIONID`, `THREADS_CSRFTOKEN`, `THREADS_DS_USER_ID`, `THREADS_MID`, `THREADS_IG_DID`, `THREADTERM_THEME`, `THREADTERM_DEMO=1`
 

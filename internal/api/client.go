@@ -24,6 +24,7 @@ type Client interface {
 	Thread(id string) (models.Thread, error)
 	Profile(username string) (models.User, []models.Post, error)
 	Search(q string, limit int) (models.FeedPage, error)
+	Latest(username string, limit int) (models.FeedPage, error)
 	Publish(text string) (models.PublishResult, error)
 	Reply(parentID, text string) (models.PublishResult, error)
 	Like(id string) error
@@ -75,6 +76,9 @@ func (b *brokenClient) Profile(string) (models.User, []models.Post, error) {
 func (b *brokenClient) Search(string, int) (models.FeedPage, error) {
 	return models.FeedPage{}, b.err
 }
+func (b *brokenClient) Latest(string, int) (models.FeedPage, error) {
+	return models.FeedPage{}, b.err
+}
 func (b *brokenClient) Publish(string) (models.PublishResult, error) {
 	return models.PublishResult{}, b.err
 }
@@ -98,6 +102,16 @@ func (d *demoAdapter) Profile(u string) (models.User, []models.Post, error) {
 }
 func (d *demoAdapter) Search(q string, n int) (models.FeedPage, error) {
 	return d.store.Search(q, n)
+}
+func (d *demoAdapter) Latest(username string, n int) (models.FeedPage, error) {
+	_, posts, err := d.store.Profile(username)
+	if err != nil {
+		return models.FeedPage{}, err
+	}
+	if n > 0 && len(posts) > n {
+		posts = posts[:n]
+	}
+	return models.FeedPage{Posts: posts}, nil
 }
 func (d *demoAdapter) Publish(t string) (models.PublishResult, error) { return d.store.Publish(t) }
 func (d *demoAdapter) Reply(p, t string) (models.PublishResult, error) {
@@ -309,6 +323,12 @@ func (g *graphClient) Search(query string, limit int) (models.FeedPage, error) {
 		posts = append(posts, m.toPost())
 	}
 	return models.FeedPage{Posts: posts}, nil
+}
+
+func (g *graphClient) Latest(username string, limit int) (models.FeedPage, error) {
+	// Official API only exposes the authenticated user's media.
+	_ = username
+	return g.Feed("", limit)
 }
 
 func (g *graphClient) Publish(text string) (models.PublishResult, error) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/arifaqyl/threadterm/internal/api"
 	"github.com/arifaqyl/threadterm/internal/auth"
@@ -54,11 +55,13 @@ Default mode is demo (offline). Set a Meta Threads token for live.`,
 		cmdPost(),
 		cmdThread(),
 		cmdSearch(),
+		cmdLatest(),
 		cmdProfile(),
 		cmdLike(),
 		cmdLogin(),
 		cmdLogout(),
 		cmdWhoami(),
+		cmdStatus(),
 		cmdTheme(),
 		cmdDoctor(),
 		cmdVersion(),
@@ -87,7 +90,7 @@ func printJSON(v any) error {
 func cmdFeed() *cobra.Command {
 	return &cobra.Command{
 		Use:   "feed",
-		Short: "Show your threads / demo feed",
+		Short: "Live discovery feed (following + seeds) or home timeline",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, c, err := makeClient()
 			if err != nil {
@@ -100,8 +103,12 @@ func cmdFeed() *cobra.Command {
 			if jsonOut {
 				return printJSON(page)
 			}
+			if len(page.Posts) == 0 {
+				fmt.Println("no posts yet — try: threadterm search malaysia")
+				return nil
+			}
 			for _, p := range page.Posts {
-				fmt.Printf("%s  @%s  Ã¢â„¢Â¥%d\n  %s\n\n", p.ID, p.Username, p.LikeCount, indent(p.Text, 2))
+				fmt.Printf("%s  @%s  ♥%d\n  %s\n\n", p.ID, p.Username, p.LikeCount, indent(p.Text, 2))
 			}
 			return nil
 		},
@@ -164,7 +171,7 @@ func cmdThread() *cobra.Command {
 func cmdSearch() *cobra.Command {
 	return &cobra.Command{
 		Use:   "search [query]",
-		Short: "Search posts (keyword API or local filter)",
+		Short: "Search users and return their latest posts (agent-friendly)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, c, err := makeClient()
@@ -178,9 +185,78 @@ func cmdSearch() *cobra.Command {
 			if jsonOut {
 				return printJSON(page)
 			}
-			for _, p := range page.Posts {
-				fmt.Printf("@%s  %s\n  %s\n\n", p.Username, p.ID, indent(p.Text, 2))
+			if len(page.Posts) == 0 {
+				fmt.Println("no hits")
+				return nil
 			}
+			for _, p := range page.Posts {
+				fmt.Printf("@%s  %s  ♥%d\n  %s\n\n", p.Username, p.ID, p.LikeCount, indent(p.Text, 2))
+			}
+			return nil
+		},
+	}
+}
+
+func cmdLatest() *cobra.Command {
+	return &cobra.Command{
+		Use:   "latest [username]",
+		Short: "Latest posts from a user (watch / scrape helper)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := makeClient()
+			if err != nil {
+				return err
+			}
+			page, err := c.Latest(args[0], limit)
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				return printJSON(page)
+			}
+			for _, p := range page.Posts {
+				fmt.Printf("%s  @%s  ♥%d  %s\n  %s\n\n",
+					p.Timestamp.Format(time.RFC3339), p.Username, p.LikeCount, p.ID, indent(p.Text, 2))
+			}
+			return nil
+		},
+	}
+}
+
+func cmdStatus() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Quick auth + feed health check (like twitter status)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, c, err := makeClient()
+			if err != nil {
+				return err
+			}
+			st := c.AuthStatus()
+			page, ferr := c.Feed("", 3)
+			out := map[string]any{
+				"mode":     st.Mode,
+				"ready":    st.Ready,
+				"username": st.Username,
+				"user_id":  st.UserID,
+				"theme":    cfg.Theme,
+				"session":  cfg.HasSession(),
+				"bearer":   cfg.HasBearer(),
+				"feed_ok":  ferr == nil,
+				"feed_n":   len(page.Posts),
+			}
+			if ferr != nil {
+				out["feed_error"] = ferr.Error()
+			}
+			if jsonOut {
+				return printJSON(out)
+			}
+			fmt.Printf("mode=%s user=@%s ready=%v session=%v bearer=%v feed=%d",
+				st.Mode, st.Username, st.Ready, cfg.HasSession(), cfg.HasBearer(), len(page.Posts))
+			if ferr != nil {
+				fmt.Printf(" err=%v", ferr)
+			}
+			fmt.Println()
 			return nil
 		},
 	}

@@ -955,7 +955,7 @@ func (m Model) renderCompose() string {
 func (m Model) renderFeedBody() string {
 	s := m.styles
 	if len(m.posts) == 0 {
-		return s.muted.Render("\n  no posts — press r to refresh, c to compose, a to login\n")
+		return s.muted.Render("\n  loading discovery feed…\n  if empty: press r, or search via CLI:\n  threadterm search malaysia --json\n")
 	}
 	var b strings.Builder
 	b.WriteString(s.muted.Render(fmt.Sprintf("  FEED  ·  %d  ·  j/k move  ·  enter open\n\n", len(m.posts))))
