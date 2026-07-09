@@ -28,8 +28,7 @@ type sessionClient struct {
 // Opt-in discovery seeds (NOT your feed). Used only by Discover / feed --discover.
 var discoverySeeds = []string{
 	"myrapidkl", "rapidkl", "ktmb_berhad", "ktmberhad", "mrtcorp",
-	"airasia", "bernamatv", "astroawani", "thevocket", "saysdotcom",
-	"malaysiakini", "malaymail", "worldofbuzz",
+	"prasarana_malaysia", "askrapidkl", "mymrtcorp",
 }
 
 func newSessionClient(cfg *config.Config) (*sessionClient, error) {
@@ -308,6 +307,7 @@ func (s *sessionClient) Search(q string, limit int) (models.FeedPage, error) {
 	// Primary: render threads.com/search (same lane as TrafficMY collector).
 	posts, browserErr := browser.SearchPosts(ctx, s.cfg, q, limit)
 	if browserErr == nil {
+		posts = filterPostsByQuery(posts, q)
 		sort.Slice(posts, func(i, j int) bool { return posts[i].Timestamp.After(posts[j].Timestamp) })
 		posts = dedupePosts(posts)
 		if len(posts) > limit {
@@ -771,12 +771,16 @@ func filterPostsByQuery(posts []models.Post, q string) []models.Post {
 		return posts
 	}
 	primary := tokens[0]
+	isTransitQuery := queryLooksTransit(tokens)
 	var (
 		outStrict  []models.Post
 		outRelaxed []models.Post
 	)
 	for _, p := range posts {
 		text := strings.ToLower(p.Text + " " + p.Username)
+		if isTransitQuery && looksLikePromoNoise(text) {
+			continue
+		}
 		matched := 0
 		hasPrimary := strings.Contains(text, primary)
 		for _, t := range tokens {
@@ -801,6 +805,33 @@ func filterPostsByQuery(posts []models.Post, q string) []models.Post {
 		return nil
 	}
 	return outRelaxed
+}
+
+func queryLooksTransit(tokens []string) bool {
+	for _, t := range tokens {
+		switch t {
+		case "lrt", "mrt", "ktm", "komuter", "monorail", "rapidkl", "prasarana", "train", "tren", "transit", "kelana", "ampang", "petaling", "kajang", "putrajaya":
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikePromoNoise(text string) bool {
+	noise := []string{
+		"full story on",
+		"cover image",
+		"opening",
+		"customers will get",
+		"free serving",
+		"swipe for the full story",
+	}
+	for _, n := range noise {
+		if strings.Contains(text, n) {
+			return true
+		}
+	}
+	return false
 }
 
 func browserSearchOptional(err error) bool {

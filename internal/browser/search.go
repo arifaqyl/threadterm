@@ -126,13 +126,6 @@ func pythonBin() (string, error) {
 }
 
 func searchScriptPath() (string, error) {
-	if p := strings.TrimSpace(os.Getenv("THREADTERM_SEARCH_SCRIPT")); p != "" {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-		return "", fmt.Errorf("THREADTERM_SEARCH_SCRIPT not found: %s", p)
-	}
-
 	candidates := []string{
 		"scripts/threads_search.py",
 	}

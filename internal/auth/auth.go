@@ -126,7 +126,12 @@ func ExchangeCode(clientID, clientSecret, redirectURI, code string) (accessToken
 	form.Set("redirect_uri", redirectURI)
 	form.Set("code", code)
 
-	resp, err := http.PostForm(tokenURL, form)
+	req, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return "", "", err
 	}
@@ -154,7 +159,11 @@ func exchangeLongLived(clientSecret, shortToken string) (string, error) {
 	q.Set("grant_type", "th_exchange_token")
 	q.Set("client_secret", clientSecret)
 	q.Set("access_token", shortToken)
-	resp, err := http.Get(longLivedURL + "?" + q.Encode())
+	req, err := http.NewRequest(http.MethodGet, longLivedURL+"?"+q.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -213,7 +222,10 @@ func LoginLocalhost(cfg *config.Config, port int) (*config.Config, error) {
 		_, _ = io.WriteString(w, "<html><body><h1>threadterm</h1><p>Login OK. You can close this tab.</p></body></html>")
 		codeCh <- code
 	})
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() { _ = srv.Close() }()
 
@@ -245,7 +257,11 @@ func LoginLocalhost(cfg *config.Config, port int) (*config.Config, error) {
 
 func enrichUsername(cfg *config.Config) error {
 	u := "https://graph.threads.net/v1.0/me?fields=id,username&access_token=" + url.QueryEscape(cfg.AccessToken)
-	resp, err := http.Get(u)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return err
 	}
