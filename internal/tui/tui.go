@@ -1217,7 +1217,8 @@ func (m Model) renderFeedBody() (string, []int) {
 	var b strings.Builder
 	header := s.muted.Render(fmt.Sprintf("  %s  ·  %d  ·  j/k  ·  / search  ·  y copy  ·  enter open\n\n", strings.ToUpper(src), len(m.posts)))
 	if m.lastQuery != "" && (src == "search" || src == "search-browser" || src == "search-web") {
-		header = s.muted.Render(fmt.Sprintf("  %s  ·  query: %q  ·  %d results  ·  / new search  ·  enter open\n\n", strings.ToUpper(src), m.lastQuery, len(m.posts)))
+		header = s.accent.Render("  SEARCH MODE  ") + " " +
+			s.muted.Render(fmt.Sprintf("query: %q  ·  %d results  ·  / new search  ·  enter open\n\n", m.lastQuery, len(m.posts)))
 	}
 	b.WriteString(header)
 	offsets := make([]int, len(m.posts))
