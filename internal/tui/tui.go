@@ -32,8 +32,9 @@ const (
 )
 
 type feedLoadedMsg struct {
-	page models.FeedPage
-	err  error
+	page  models.FeedPage
+	err   error
+	query string
 }
 type threadLoadedMsg struct {
 	th  models.Thread
@@ -81,6 +82,7 @@ type Model struct {
 	replyTo string
 
 	searchInput textinput.Model
+	lastQuery   string
 
 	// login form
 	// 0=menu 1=cookies 2=user 3=pass 4=official-token 5=official-uid 6=oauth
@@ -189,7 +191,7 @@ func loadDiscover(c api.Client) tea.Cmd {
 func loadSearch(c api.Client, q string) tea.Cmd {
 	return func() tea.Msg {
 		page, err := c.Search(q, 40)
-		return feedLoadedMsg{page: page, err: err}
+		return feedLoadedMsg{page: page, err: err, query: q}
 	}
 }
 
@@ -293,6 +295,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.posts = msg.page.Posts
 		m.feedSource = msg.page.Source
 		m.feedHint = msg.page.Hint
+		if msg.query != "" {
+			m.lastQuery = msg.query
+		} else if m.feedSource != "search" && m.feedSource != "search-browser" && m.feedSource != "search-web" {
+			m.lastQuery = ""
+		}
 		m.cursor = 0
 		if m.cursor >= len(m.posts) {
 			m.cursor = max(0, len(m.posts)-1)
@@ -302,7 +309,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if src == "" {
 			src = "feed"
 		}
-		m.status = fmt.Sprintf("%d posts · %s · %s", len(m.posts), src, time.Now().Format("15:04"))
+		if m.lastQuery != "" && (src == "search" || src == "search-browser" || src == "search-web") {
+			m.status = fmt.Sprintf("%d posts · %s · query: %q · %s", len(m.posts), src, m.lastQuery, time.Now().Format("15:04"))
+		} else {
+			m.status = fmt.Sprintf("%d posts · %s · %s", len(m.posts), src, time.Now().Format("15:04"))
+		}
 		if m.feedHint != "" && len(m.posts) == 0 {
 			m.status = m.feedHint
 		}
@@ -412,6 +423,7 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.feedSource = "search"
 		m.feedHint = ""
+		m.lastQuery = q
 		m.status = "searching " + q + "…"
 		m.loading = true
 		m.refreshViewport()
@@ -714,11 +726,13 @@ func (m Model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case "r", "f":
+		m.lastQuery = ""
 		m.status = "refreshing following…"
 		m.loading = true
 		m.refreshViewport()
 		return m, loadFeed(m.client)
 	case "d":
+		m.lastQuery = ""
 		m.status = "loading public discover…"
 		m.loading = true
 		m.refreshViewport()
@@ -1202,6 +1216,9 @@ func (m Model) renderFeedBody() (string, []int) {
 	}
 	var b strings.Builder
 	header := s.muted.Render(fmt.Sprintf("  %s  ·  %d  ·  j/k  ·  / search  ·  y copy  ·  enter open\n\n", strings.ToUpper(src), len(m.posts)))
+	if m.lastQuery != "" && (src == "search" || src == "search-browser" || src == "search-web") {
+		header = s.muted.Render(fmt.Sprintf("  %s  ·  query: %q  ·  %d results  ·  / new search  ·  enter open\n\n", strings.ToUpper(src), m.lastQuery, len(m.posts)))
+	}
 	b.WriteString(header)
 	offsets := make([]int, len(m.posts))
 	line := strings.Count(header, "\n")
