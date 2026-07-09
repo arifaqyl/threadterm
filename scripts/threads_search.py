@@ -20,15 +20,28 @@ els => els.map(a => {
   const href = a.href || '';
   if (!href || href.endsWith('/media')) return null;
   let node = a;
-  let bestText = '';
-  let bestLen = 0;
-  for (let i = 0; i < 12 && node; i++, node = node.parentElement) {
-    const text = (node.innerText || '').trim();
+  let bestText = (a.innerText || '').trim();
+  let bestScore = 1e9;
+  const scoreText = (text) => {
     const len = text.length;
-    if (len >= 40 && len <= 400 && len > bestLen) {
+    if (len < 20 || len > 1200) return 1e9;
+    let score = Math.abs(len - 180);
+    if (text.includes('What\\'s new?')) score += 1200;
+    if (text.includes('Post\\n')) score += 400;
+    const atCount = (text.match(/@[a-z0-9_.]+/gi) || []).length;
+    if (atCount > 2) score += atCount * 120;
+    return score;
+  };
+  for (let i = 0; i < 14 && node; i++, node = node.parentElement) {
+    const text = (node.innerText || '').trim();
+    const score = scoreText(text);
+    if (score < bestScore) {
+      bestScore = score;
       bestText = text;
-      bestLen = len;
     }
+  }
+  if (!bestText || bestText.length < 8) {
+    bestText = (a.innerText || '').trim();
   }
   const timeEl = a.querySelector('time') || a.closest('div')?.querySelector('time');
   return {
@@ -96,9 +109,12 @@ def _parse_ts(raw: str) -> str:
 def _collect_posts(page, page_url: str, limit: int, scroll_rounds: int = 3) -> list[dict]:
     rows: list[dict] = []
     seen: set[str] = set()
+    stale_rounds = 0
+    max_rounds = min(24, max(scroll_rounds, 8 + limit // 2))
     page.goto(page_url, wait_until="domcontentloaded", timeout=35000)
     page.wait_for_timeout(1800)
-    for _ in range(scroll_rounds):
+    for _ in range(max_rounds):
+        before = len(seen)
         batch = page.locator(SEARCH_POST_SELECTOR).evaluate_all(SEARCH_POST_JS)
         for item in batch:
             href = item.get("href", "")
@@ -120,8 +136,14 @@ def _collect_posts(page, page_url: str, limit: int, scroll_rounds: int = 3) -> l
             )
         if len(rows) >= limit:
             break
-        page.mouse.wheel(0, 2400)
-        page.wait_for_timeout(600)
+        if len(seen) == before:
+            stale_rounds += 1
+        else:
+            stale_rounds = 0
+        if stale_rounds >= 6 and len(rows) > 0:
+            break
+        page.mouse.wheel(0, 3200)
+        page.wait_for_timeout(900)
     return rows[:limit]
 
 
@@ -158,7 +180,26 @@ def feed_posts(session: dict, limit: int = 25) -> list[dict]:
         context = browser.new_context(viewport={"width": 1280, "height": 2200})
         context.add_cookies(cookies)
         page = context.new_page()
-        rows = _collect_posts(page, "https://www.threads.com/", limit, scroll_rounds=4)
+        rows: list[dict] = []
+        seen_ids: set[str] = set()
+        feed_urls = [
+            "https://www.threads.com/",
+            "https://www.threads.com/following",
+            "https://www.threads.com/?hl=en",
+        ]
+        for url in feed_urls:
+            need = max(3, limit - len(rows))
+            got = _collect_posts(page, url, need, scroll_rounds=10)
+            for item in got:
+                pid = item.get("id", "")
+                if not pid or pid in seen_ids:
+                    continue
+                seen_ids.add(pid)
+                rows.append(item)
+                if len(rows) >= limit:
+                    break
+            if len(rows) >= limit:
+                break
         context.close()
         browser.close()
     return rows[:limit]
