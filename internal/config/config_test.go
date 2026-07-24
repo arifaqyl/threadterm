@@ -3,13 +3,93 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestParseCookieHeader(t *testing.T) {
-	got := ParseCookieHeader("sessionid=s1; csrftoken=c1; ds_user_id=42; mid=m1; ig_did=i1")
-	if got.SessionID != "s1" || got.CSRFToken != "c1" || got.DSUserID != "42" || got.Mid != "m1" || got.IgDid != "i1" {
-		t.Fatalf("unexpected parse result: %+v", got)
+	cases := []struct {
+		name string
+		raw  string
+		want SessionCookies
+	}{
+		{
+			"all_five",
+			"sessionid=s1; csrftoken=c1; ds_user_id=42; mid=m1; ig_did=i1",
+			SessionCookies{SessionID: "s1", CSRFToken: "c1", DSUserID: "42", Mid: "m1", IgDid: "i1"},
+		},
+		{
+			"required_only",
+			"sessionid=s1; csrftoken=c1; ds_user_id=42",
+			SessionCookies{SessionID: "s1", CSRFToken: "c1", DSUserID: "42"},
+		},
+		{
+			"case_insensitive_keys",
+			"SessionID=s1; CSRFToken=c1; DS_USER_ID=42",
+			SessionCookies{SessionID: "s1", CSRFToken: "c1", DSUserID: "42"},
+		},
+		{
+			"ignores_unknown_cookies",
+			"foo=bar; sessionid=s1; csrftoken=c1; ds_user_id=42; baz=qux",
+			SessionCookies{SessionID: "s1", CSRFToken: "c1", DSUserID: "42"},
+		},
+		{
+			"skips_malformed_segments",
+			"sessionid=s1; garbage-no-equals; csrftoken=c1; ds_user_id=42",
+			SessionCookies{SessionID: "s1", CSRFToken: "c1", DSUserID: "42"},
+		},
+		{
+			"trims_whitespace",
+			"  sessionid = s1 ; csrftoken=c1 ; ds_user_id=42 ",
+			SessionCookies{SessionID: "s1", CSRFToken: "c1", DSUserID: "42"},
+		},
+		{
+			"empty_input",
+			"   ",
+			SessionCookies{},
+		},
+		{
+			"only_unknown_cookies",
+			"rando=keep; another=also",
+			SessionCookies{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseCookieHeader(tc.raw)
+			if got != tc.want {
+				t.Fatalf("ParseCookieHeader(%q) = %+v, want %+v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// Locks the trust boundary the bird-style login relies on: a parsed header needs
+// all three of sessionid, csrftoken, ds_user_id for HasSession to be true.
+func TestParseCookieHeaderHasSessionBoundary(t *testing.T) {
+	segments := map[string]string{
+		"sessionid":  "sessionid=s",
+		"csrftoken":  "csrftoken=c",
+		"ds_user_id": "ds_user_id=1",
+	}
+	order := []string{"sessionid", "csrftoken", "ds_user_id"}
+
+	full := strings.Join([]string{segments["sessionid"], segments["csrftoken"], segments["ds_user_id"]}, "; ")
+	if (&Config{Session: ParseCookieHeader(full)}).HasSession() != true {
+		t.Fatalf("full header %q should satisfy HasSession", full)
+	}
+	for _, drop := range order {
+		var kept []string
+		for _, k := range order {
+			if k == drop {
+				continue
+			}
+			kept = append(kept, segments[k])
+		}
+		raw := strings.Join(kept, "; ")
+		if (&Config{Session: ParseCookieHeader(raw)}).HasSession() {
+			t.Fatalf("HasSession true after dropping %q (raw=%q)", drop, raw)
+		}
 	}
 }
 
