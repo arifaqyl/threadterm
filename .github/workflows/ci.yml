@@ -20,3 +20,7 @@ jobs:
         run: go test ./... -cover
       - name: Build
         run: go build -o threadterm ./cmd/threadterm
+      - name: Vulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

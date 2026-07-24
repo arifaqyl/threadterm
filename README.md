@@ -31,7 +31,7 @@ threadterm --demo         # try offline first
 | Key | Action |
 |-----|--------|
 | `j` / `k` | move |
-| `/` | **search** users |
+| `/` | **search** posts |
 | `y` | copy link/text to clipboard |
 | `f` / `r` | your following feed |
 | `d` | public discover (not your feed) |
@@ -130,6 +130,14 @@ Powered under the hood by [threads-go](https://github.com/teslashibe/threads-go)
 ## Disclaimer
 
 Respect Meta’s terms. Cookie/private APIs can break. Don’t abuse rate limits. Use your own account.
+
+## Security
+
+- Credentials are stored locally at `~/.threadterm/config.json` (file `0600`, dir `0700`) as plaintext JSON — the same trust model as other CLI cookie tools. Run `threadterm logout` to clear the session and bearer token.
+- No telemetry, no analytics, no background network calls. The only outbound traffic is to threads.com (and a local Playwright/Chromium instance for post search). `threadterm doctor` masks tokens; passwords are never logged.
+- Post search/feed via Playwright passes your session cookies to a local Python subprocess over stdin — fine on a single-user desktop, not intended for a shared server.
+- `config.Load()` fails loudly on a corrupt config file rather than silently ignoring it.
+- Not affiliated with Meta. Cookie/private-API clients can break or hit 2FA/checkpoints; browser-cookie login is the default and password login is a fallback that may be blocked.
 
 ## License
 
