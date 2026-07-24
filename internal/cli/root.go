@@ -401,7 +401,6 @@ func cmdLike() *cobra.Command {
 func cmdLogin() *cobra.Command {
 	var (
 		token, userID string
-		port          int
 		cookieString  string
 		sessionID     string
 		csrf          string
@@ -544,8 +543,6 @@ Other options:
 	cmd.Flags().StringVar(&totp, "totp", "", "authenticator 2FA secret")
 	cmd.Flags().StringVar(&token, "token", "", "official Graph access token")
 	cmd.Flags().StringVar(&userID, "user-id", "", "official Graph user id")
-	cmd.Flags().IntVar(&port, "port", 8765, "localhost OAuth callback port")
-	_ = port
 	return cmd
 }
 func cmdLogout() *cobra.Command {

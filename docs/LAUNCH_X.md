@@ -10,7 +10,8 @@ Just:
 ```
 threadterm login
 ```
-username + password. No Meta app. No cookie hustle.
+reads your Threads session from Chrome/Edge/Brave/Firefox — just be logged
+into threads.com in the browser first. No Meta app. No password.
 
 TUI + CLI + --json for agents.
 github.com/arifaqyl/threadterm
@@ -34,5 +35,6 @@ threadterm post "shipped" --json
 
 **4/**
 
-Not affiliated with Meta. Private login can hit 2FA/checkpoints — we document it.
+Not affiliated with Meta. Browser-cookie login by default; password login can
+hit 2FA/checkpoints — we document it.
 Star if you want Homebrew next ⭐

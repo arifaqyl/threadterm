@@ -14,6 +14,7 @@ import (
 
 	"github.com/arifaqyl/threadterm/internal/config"
 	"github.com/arifaqyl/threadterm/internal/models"
+	"github.com/arifaqyl/threadterm/scripts"
 )
 
 type searchRequest struct {
@@ -219,6 +220,11 @@ func searchScriptPath() (string, error) {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
 			return c, nil
 		}
+	}
+	// Last resort: the script embedded in the binary, so search and feed keep
+	// working from `go install` and release archives without scripts/ on disk.
+	if embedded, err := scripts.SearchScriptPath(); err == nil {
+		return embedded, nil
 	}
 	return "", fmt.Errorf("scripts/threads_search.py not found")
 }

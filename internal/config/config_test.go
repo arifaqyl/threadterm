@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseCookieHeader(t *testing.T) {
 	got := ParseCookieHeader("sessionid=s1; csrftoken=c1; ds_user_id=42; mid=m1; ig_did=i1")
@@ -28,5 +32,23 @@ func TestModePriority(t *testing.T) {
 	cfg.Demo = true
 	if cfg.Mode() != "demo" {
 		t.Fatalf("expected demo when forced, got %s", cfg.Mode())
+	}
+}
+
+func TestLoadErrorsOnCorruptJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("HOME", dir)
+
+	cfgDir := filepath.Join(dir, ".threadterm")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte("{not valid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to error on corrupt JSON, got nil")
 	}
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,7 +88,9 @@ func Load() (*Config, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err == nil {
-		_ = json.Unmarshal(data, cfg)
+		if uerr := json.Unmarshal(data, cfg); uerr != nil {
+			return nil, fmt.Errorf("parse config %s: %w", path, uerr)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -170,9 +173,6 @@ func (c *Config) Mode() string {
 		return "demo"
 	}
 	if c.HasBearer() {
-		if c.HasSession() {
-			return "live"
-		}
 		return "live"
 	}
 	if c.HasSession() {
