@@ -27,6 +27,11 @@ var (
 // Version is injected at build time via -ldflags.
 var Version = "dev"
 
+// clientFactory builds the api.Client from a config. Overridable in tests
+// (default: api.New) so CLI commands can be exercised against a fake client
+// without touching the network or the on-disk config.
+var clientFactory = api.New
+
 func Execute() error {
 	root := &cobra.Command{
 		Use:   "threadterm",
@@ -83,7 +88,7 @@ func makeClient() (*config.Config, api.Client, error) {
 	if demoForce {
 		cfg.Demo = true
 	}
-	return cfg, api.New(cfg), nil
+	return cfg, clientFactory(cfg), nil
 }
 
 func printJSON(v any) error {
@@ -627,7 +632,7 @@ func cmdDoctor() *cobra.Command {
 		Use:   "doctor",
 		Short: "Check config, auth, and API reachability",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			cfg, c, err := makeClient()
 			if err != nil {
 				return err
 			}
@@ -641,7 +646,6 @@ func cmdDoctor() *cobra.Command {
 			fmt.Println("  token: ", mask(cfg.AccessToken))
 			fmt.Println("  user:  ", cfg.UserID, cfg.Username)
 			fmt.Println("  app id:", mask(cfg.ClientID))
-			c := api.New(cfg)
 			page, err := c.Feed("", 3)
 			if err != nil {
 				fmt.Println("  feed:  FAIL", err)
