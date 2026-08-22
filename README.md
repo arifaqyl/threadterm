@@ -97,6 +97,7 @@ threadterm search "LRT KL" --json        # post search (needs Python + Playwrigh
 threadterm search-users "myrapidkl"      # account search
 threadterm latest zuck --json -n 10
 threadterm profile mosseri --json
+threadterm reply <post-id> "good point"  # reply by id (same as TUI R key)
 threadterm whoami --json
 threadterm doctor
 ```
@@ -104,6 +105,8 @@ threadterm doctor
 Automation guide: [docs/AGENTS.md](docs/AGENTS.md)
 
 Env: `THREADS_SESSIONID`, `THREADS_CSRFTOKEN`, `THREADS_DS_USER_ID`, `THREADS_MID`, `THREADS_IG_DID`, `THREADTERM_THEME`, `THREADTERM_DEMO=1`
+
+`feed --discover` pulls a public sample from seed accounts (Malaysia transit preset). Override with `THREADTERM_DISCOVERY_SEEDS="user1,user2"`, or set `THREADTERM_DISCOVERY_SEEDS=none` to disable seeding.
 
 **Post search** uses headless Chromium via Playwright (same approach as TrafficMY):
 

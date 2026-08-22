@@ -26,9 +26,18 @@ type sessionClient struct {
 }
 
 // Opt-in discovery seeds (NOT your feed). Used only by Discover / feed --discover.
-var discoverySeeds = []string{
+// Default preset is Malaysia transit accounts; override via
+// THREADTERM_DISCOVERY_SEEDS (comma-separated) or "none" to disable.
+var defaultDiscoverySeeds = []string{
 	"myrapidkl", "rapidkl", "ktmb_berhad", "ktmberhad", "mrtcorp",
 	"prasarana_malaysia", "askrapidkl", "mymrtcorp",
+}
+
+func discoverySeedsFor(cfg *config.Config) []string {
+	if cfg == nil || cfg.DiscoverySeeds == nil {
+		return defaultDiscoverySeeds
+	}
+	return cfg.DiscoverySeeds
 }
 
 func newSessionClient(cfg *config.Config) (*sessionClient, error) {
@@ -154,7 +163,7 @@ func (s *sessionClient) Discover(limit int) (models.FeedPage, error) {
 	if limit <= 0 {
 		limit = 25
 	}
-	posts, err := s.seedFeed(ctx, discoverySeeds, limit)
+	posts, err := s.seedFeed(ctx, discoverySeedsFor(s.cfg), limit)
 	if err != nil {
 		return models.FeedPage{}, err
 	}

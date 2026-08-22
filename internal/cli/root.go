@@ -62,6 +62,7 @@ Default mode is demo (offline). Set a Meta Threads token for live.`,
 	root.AddCommand(
 		cmdFeed(),
 		cmdPost(),
+		cmdReply(),
 		cmdThread(),
 		cmdSearch(),
 		cmdSearchUsers(),
@@ -163,6 +164,32 @@ func cmdPost() *cobra.Command {
 				return printJSON(res)
 			}
 			fmt.Printf("posted %s\n", res.ID)
+			if res.Permalink != "" {
+				fmt.Println(res.Permalink)
+			}
+			return nil
+		},
+	}
+}
+
+func cmdReply() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reply [post-id] [text]",
+		Short: "Reply to a thread by id (same as the TUI R key)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := makeClient()
+			if err != nil {
+				return err
+			}
+			res, err := c.Reply(args[0], strings.Join(args[1:], " "))
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				return printJSON(res)
+			}
+			fmt.Printf("replied %s\n", res.ID)
 			if res.Permalink != "" {
 				fmt.Println(res.Permalink)
 			}

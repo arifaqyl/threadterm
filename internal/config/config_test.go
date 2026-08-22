@@ -132,3 +132,52 @@ func TestLoadErrorsOnCorruptJSON(t *testing.T) {
 		t.Fatal("expected Load to error on corrupt JSON, got nil")
 	}
 }
+
+func TestParseSeedList(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"a,b,c", []string{"a", "b", "c"}},
+		{" a , b ,c ", []string{"a", "b", "c"}},
+		{"one", []string{"one"}},
+		{"none", []string{}},
+		{",,", []string{}},
+		{"", []string{}},
+	}
+	for _, tc := range cases {
+		got := ParseSeedList(tc.in)
+		if len(got) != len(tc.want) {
+			t.Fatalf("ParseSeedList(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("ParseSeedList(%q)[%d] = %q, want %q", tc.in, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
+func TestLoadDiscoverySeedsFromEnv(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("HOME", dir)
+	t.Setenv(EnvDiscoverySeeds, "user1, user2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DiscoverySeeds) != 2 || cfg.DiscoverySeeds[0] != "user1" || cfg.DiscoverySeeds[1] != "user2" {
+		t.Fatalf("expected env seeds [user1 user2], got %v", cfg.DiscoverySeeds)
+	}
+
+	t.Setenv(EnvDiscoverySeeds, "none")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DiscoverySeeds) != 0 {
+		t.Fatalf("expected empty seeds for 'none', got %v", cfg.DiscoverySeeds)
+	}
+}

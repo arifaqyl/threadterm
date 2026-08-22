@@ -17,6 +17,8 @@ const (
 	EnvDemo         = "THREADTERM_DEMO"
 	EnvTheme        = "THREADTERM_THEME"
 
+	EnvDiscoverySeeds = "THREADTERM_DISCOVERY_SEEDS"
+
 	EnvSessionID = "THREADS_SESSIONID"
 	EnvCSRFToken = "THREADS_CSRFTOKEN"
 	EnvDSUserID  = "THREADS_DS_USER_ID"
@@ -58,6 +60,11 @@ type Config struct {
 	Demo        bool   `json:"demo,omitempty"`
 	Theme       string `json:"theme,omitempty"`
 	SeenWelcome bool   `json:"seen_welcome,omitempty"`
+
+	// DiscoverySeeds overrides the default public sample accounts used by
+	// Discover / feed --discover. Comma-separated via THREADTERM_DISCOVERY_SEEDS.
+	// Set it to "none" to disable seeding entirely.
+	DiscoverySeeds []string `json:"discovery_seeds,omitempty"`
 }
 
 func Dir() (string, error) {
@@ -110,6 +117,9 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv(EnvTheme); v != "" {
 		cfg.Theme = v
+	}
+	if v := os.Getenv(EnvDiscoverySeeds); v != "" {
+		cfg.DiscoverySeeds = ParseSeedList(v)
 	}
 
 	// Session env (Twitter-CLI style)
@@ -186,6 +196,22 @@ func (c *Config) Mode() string {
 
 func (c *Config) IsLive() bool {
 	return !c.Demo && (c.HasBearer() || c.HasSession() || c.HasToken())
+}
+
+// ParseSeedList parses a comma-separated seed list. "none" (case-insensitive)
+// returns an empty slice, which disables discovery seeding.
+func ParseSeedList(raw string) []string {
+	if strings.EqualFold(strings.TrimSpace(raw), "none") {
+		return []string{}
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ParseCookieHeader parses a raw Cookie header or "name=value; name2=value2" paste.
